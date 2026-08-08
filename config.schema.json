@@ -1,0 +1,173 @@
+{
+  "pluginAlias": "OwnTone",
+  "pluginType": "platform",
+  "singular": true,
+  "headerDisplay": "Exposes each configured [OwnTone](https://owntone.github.io/owntone-server/) server as a HomeKit Television-style media accessory. Television accessories cannot be bridged, so each server must be paired separately in the Home app using the setup code printed in the Homebridge log.",
+  "footerDisplay": "Apple Home does not expose every media-player feature. Album artwork is fetched and cached internally but cannot be displayed by the Home app. See the [README](https://github.com/homebridge-owntone/homebridge-owntone#readme) for the full list of limitations.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "title": "Platform Name",
+        "description": "Name shown for this platform in the Homebridge log.",
+        "type": "string",
+        "default": "OwnTone",
+        "required": true
+      },
+      "servers": {
+        "title": "OwnTone Servers",
+        "description": "Each entry becomes one HomeKit Television accessory.",
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "title": "Accessory Name",
+              "description": "Name shown in the Home app, e.g. \"Living Room Music\".",
+              "type": "string",
+              "required": true,
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "protocol": {
+              "title": "Protocol",
+              "type": "string",
+              "default": "http",
+              "required": false,
+              "oneOf": [
+                { "title": "HTTP", "enum": ["http"] },
+                { "title": "HTTPS", "enum": ["https"] }
+              ]
+            },
+            "host": {
+              "title": "Host",
+              "description": "Hostname or IP address of the OwnTone server, e.g. 192.168.1.50 or owntone.local.",
+              "type": "string",
+              "required": true,
+              "minLength": 1,
+              "format": "hostname"
+            },
+            "port": {
+              "title": "Port",
+              "description": "OwnTone JSON API port. The OwnTone default is 3689.",
+              "type": "integer",
+              "default": 3689,
+              "required": false,
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "pollingInterval": {
+              "title": "Polling Interval (seconds)",
+              "description": "How often playback state and now-playing metadata are refreshed.",
+              "type": "integer",
+              "default": 5,
+              "required": false,
+              "minimum": 1,
+              "maximum": 3600
+            },
+            "timeout": {
+              "title": "Request Timeout (milliseconds)",
+              "description": "Requests taking longer than this are aborted.",
+              "type": "integer",
+              "default": 5000,
+              "required": false,
+              "minimum": 500,
+              "maximum": 120000
+            },
+            "username": {
+              "title": "Username",
+              "description": "Optional. Only needed when OwnTone sits behind a reverse proxy that requires HTTP basic authentication.",
+              "type": "string",
+              "required": false
+            },
+            "password": {
+              "title": "Password",
+              "description": "Optional. Used together with the username for HTTP basic authentication.",
+              "type": "string",
+              "required": false,
+              "x-schema-form": {
+                "type": "password"
+              }
+            },
+            "bearerToken": {
+              "title": "Bearer Token",
+              "description": "Optional. Sent as an Authorization: Bearer header. Takes precedence over username/password.",
+              "type": "string",
+              "required": false,
+              "x-schema-form": {
+                "type": "password"
+              }
+            },
+            "ignoreCertificateErrors": {
+              "title": "Ignore HTTPS Certificate Errors",
+              "description": "Only applies to HTTPS. Enable when the server uses a self-signed certificate.",
+              "type": "boolean",
+              "default": false,
+              "required": false
+            },
+            "exposeTrackSwitches": {
+              "title": "Expose Next/Previous/Play-Pause Switches",
+              "description": "Adds stateless switches for next track, previous track and play/pause. Useful for automations and when the Apple Remote mapping is not enough.",
+              "type": "boolean",
+              "default": false,
+              "required": false
+            }
+          }
+        }
+      }
+    }
+  },
+  "layout": [
+    {
+      "type": "fieldset",
+      "title": "Servers",
+      "expandable": false,
+      "items": [
+        {
+          "key": "servers",
+          "type": "array",
+          "orderable": false,
+          "buttonText": "Add OwnTone Server",
+          "items": [
+            "servers[].name",
+            "servers[].host",
+            {
+              "type": "flex",
+              "flex-flow": "row wrap",
+              "items": ["servers[].protocol", "servers[].port"]
+            },
+            {
+              "type": "fieldset",
+              "title": "Advanced",
+              "expandable": true,
+              "expanded": false,
+              "items": [
+                {
+                  "type": "flex",
+                  "flex-flow": "row wrap",
+                  "items": ["servers[].pollingInterval", "servers[].timeout"]
+                },
+                "servers[].exposeTrackSwitches",
+                "servers[].ignoreCertificateErrors"
+              ]
+            },
+            {
+              "type": "fieldset",
+              "title": "Authentication (optional)",
+              "expandable": true,
+              "expanded": false,
+              "items": [
+                {
+                  "type": "flex",
+                  "flex-flow": "row wrap",
+                  "items": ["servers[].username", "servers[].password"]
+                },
+                "servers[].bearerToken"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

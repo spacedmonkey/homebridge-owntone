@@ -1,0 +1,10 @@
+src/
+test/
+coverage/
+.github/
+tsconfig.json
+tsconfig.test.json
+jest.config.js
+eslint.config.js
+config.example.json
+.editorconfig

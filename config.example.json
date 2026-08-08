@@ -1,0 +1,35 @@
+{
+  "bridge": {
+    "name": "Homebridge",
+    "username": "CC:22:3D:E3:CE:30",
+    "port": 51826,
+    "pin": "031-45-154"
+  },
+  "accessories": [],
+  "platforms": [
+    {
+      "platform": "OwnTone",
+      "name": "OwnTone",
+      "servers": [
+        {
+          "name": "Living Room Music",
+          "protocol": "http",
+          "host": "192.168.1.50",
+          "port": 3689,
+          "pollingInterval": 5,
+          "timeout": 5000
+        },
+        {
+          "name": "Office Music",
+          "protocol": "https",
+          "host": "owntone-office.local",
+          "port": 3689,
+          "pollingInterval": 5,
+          "timeout": 5000,
+          "ignoreCertificateErrors": true,
+          "exposeTrackSwitches": true
+        }
+      ]
+    }
+  ]
+}
