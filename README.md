@@ -45,6 +45,26 @@ Requirements:
 - Homebridge 1.6.0 or newer (Homebridge 2.x is supported)
 - An OwnTone server reachable over HTTP or HTTPS
 
+### Installing a local build (not published to npm)
+
+The Homebridge UI's **Install** button and `hb-service add` only accept the name of a package that exists on the npm registry. They reject a filesystem path with `✖ Invalid plugin name.` — so you cannot install an unpublished checkout that way.
+
+To install a local build, build a tarball and install it into Homebridge's storage path (the **Storage Path** shown on the Homebridge UI status page — commonly `/var/lib/homebridge`, `~/.homebridge`, or `/homebridge` in Docker):
+
+```bash
+cd homebridge-owntone
+npm install
+npm run build
+npm pack                       # → homebridge-owntone-1.0.0.tgz
+
+npm --prefix /var/lib/homebridge install --legacy-peer-deps \
+  "$PWD/homebridge-owntone-1.0.0.tgz"
+```
+
+Then restart Homebridge. `--legacy-peer-deps` stops npm from installing a second copy of Homebridge itself next to the plugin.
+
+For iterative development, `npm link` the package and run Homebridge with `homebridge -D` instead.
+
 ---
 
 ## Pairing: each server is a separate accessory
@@ -66,6 +86,8 @@ Once paired, the accessory behaves like any other HomeKit TV: it appears in the 
 ### Homebridge UI
 
 Open the plugin's settings and use **Add OwnTone Server** to add one entry per server. Only **Accessory Name** and **Host** are required.
+
+Above the form, each server gets a **Test Connection** button once its host is filled in. It asks Homebridge (not your browser) to send `GET /api/config` to that server using the protocol, port and credentials currently entered, and reports whether it answered with HTTP 200.
 
 ### Manual configuration
 

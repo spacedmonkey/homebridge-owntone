@@ -2,6 +2,7 @@
   "pluginAlias": "OwnTone",
   "pluginType": "platform",
   "singular": true,
+  "customUi": true,
   "headerDisplay": "Exposes each configured [OwnTone](https://owntone.github.io/owntone-server/) server as a HomeKit Television-style media accessory. Television accessories cannot be bridged, so each server must be paired separately in the Home app using the setup code printed in the Homebridge log.",
   "footerDisplay": "Apple Home does not expose every media-player feature. Album artwork is fetched and cached internally but cannot be displayed by the Home app. See the [README](https://github.com/homebridge-owntone/homebridge-owntone#readme) for the full list of limitations.",
   "schema": {
@@ -134,7 +135,10 @@
             {
               "type": "flex",
               "flex-flow": "row wrap",
-              "items": ["servers[].protocol", "servers[].port"]
+              "items": [
+                "servers[].protocol",
+                { "key": "servers[].port", "type": "number" }
+              ]
             },
             {
               "type": "fieldset",
@@ -145,7 +149,10 @@
                 {
                   "type": "flex",
                   "flex-flow": "row wrap",
-                  "items": ["servers[].pollingInterval", "servers[].timeout"]
+                  "items": [
+                    { "key": "servers[].pollingInterval", "type": "number" },
+                    { "key": "servers[].timeout", "type": "number" }
+                  ]
                 },
                 "servers[].exposeTrackSwitches",
                 "servers[].ignoreCertificateErrors"

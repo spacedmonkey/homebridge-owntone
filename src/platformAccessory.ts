@@ -48,7 +48,7 @@ export class OwnTonePlatformAccessory {
   private polling = false;
   private disposed = false;
   private consecutiveFailures = 0;
-  private pollCount = 0;
+  private outputsLoaded = false;
 
   private reachable = false;
   private player?: PlayerSnapshot;
@@ -69,6 +69,7 @@ export class OwnTonePlatformAccessory {
     this.televisionService = this.configureTelevisionService();
     this.speakerService = this.configureSpeakerService();
     this.configureDefaultInputSource();
+    this.configureRefreshOutputsSwitch();
 
     if (this.config.exposeTrackSwitches) {
       this.configureTrackSwitches();
@@ -258,6 +259,23 @@ export class OwnTonePlatformAccessory {
     return service;
   }
 
+  /**
+   * OwnTone outputs are only auto-discovered once, on the first poll after
+   * startup — after that the list is cached indefinitely. This switch is the
+   * only way to pick up outputs that were added or removed later without
+   * restarting Homebridge.
+   */
+  private configureRefreshOutputsSwitch(): void {
+    this.addTrackSwitch('owntone-refresh-outputs', 'Refresh Outputs', () => this.refreshOutputsNow());
+  }
+
+  private async refreshOutputsNow(): Promise<void> {
+    const outputs = await this.client.getOutputs();
+    this.outputsLoaded = true;
+    this.syncInputSources(outputs);
+    this.pushStateToHomeKit();
+  }
+
   private configureTrackSwitches(): void {
     this.addTrackSwitch('owntone-next', 'Next Track', () => this.client.next());
     this.addTrackSwitch('owntone-previous', 'Previous Track', () => this.client.previous());
@@ -435,11 +453,6 @@ export class OwnTonePlatformAccessory {
     }
   }
 
-  /** How many poll cycles to skip between two output refreshes (~60s). */
-  private get outputRefreshEvery(): number {
-    return Math.max(1, Math.round(60 / this.config.pollingInterval));
-  }
-
   private async poll(): Promise<void> {
     if (this.disposed) {
       return;
@@ -462,13 +475,14 @@ export class OwnTonePlatformAccessory {
         this.throttle.log('nowplaying', (message) => this.platform.log.debug(message), `"${this.config.name}": could not read now-playing metadata: ${describeError(error)}`);
       }
 
-      const shouldRefreshOutputs = this.pollCount % this.outputRefreshEvery === 0;
-      this.pollCount += 1;
-
+      // Outputs rarely change once discovered, so they are only fetched
+      // automatically on the very first poll; after that the cached list is
+      // kept indefinitely and only replaced via the "Refresh Outputs" switch.
       let outputs: OutputSnapshot[] | undefined;
-      if (shouldRefreshOutputs) {
+      if (!this.outputsLoaded) {
         try {
           outputs = await this.client.getOutputs();
+          this.outputsLoaded = true;
         } catch (error) {
           this.throttle.log('outputs', (message) => this.platform.log.debug(message), `"${this.config.name}": could not read outputs: ${describeError(error)}`);
         }

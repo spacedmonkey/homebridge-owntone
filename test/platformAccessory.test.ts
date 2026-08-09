@@ -269,6 +269,44 @@ describe('OwnTonePlatformAccessory — services', () => {
     expect(accessory.getServiceById(HapService.Switch, 'owntone-playpause')).toBeDefined();
     handler.dispose();
   });
+
+  it('always creates the Refresh Outputs switch, regardless of exposeTrackSwitches', async () => {
+    const { accessory, handler } = await build();
+
+    expect(accessory.getServiceById(HapService.Switch, 'owntone-refresh-outputs')).toBeDefined();
+    handler.dispose();
+  });
+});
+
+describe('OwnTonePlatformAccessory — refresh outputs switch', () => {
+  it('re-fetches outputs and updates input sources on demand', async () => {
+    const { accessory, client, handler } = await build();
+    const refreshSwitch = accessory.getServiceById(HapService.Switch, 'owntone-refresh-outputs') as Service;
+
+    expect(client.getOutputs).toHaveBeenCalledTimes(1);
+
+    client.getOutputs.mockResolvedValueOnce([{ id: '789', name: 'Garage', type: 'AirPlay', selected: false, volume: 0 }]);
+    await refreshSwitch.getCharacteristic(Characteristic.On).handleSetRequest(true);
+
+    expect(client.getOutputs).toHaveBeenCalledTimes(2);
+    expect(accessory.services.filter((service) => service.UUID === HapService.InputSource.UUID)).toHaveLength(2);
+
+    await jest.advanceTimersByTimeAsync(600);
+    expect(refreshSwitch.getCharacteristic(Characteristic.On).value).toBe(false);
+
+    handler.dispose();
+  });
+
+  it('does not reject when the refresh fails', async () => {
+    const client = createFakeClient();
+    const { accessory, handler } = await build({}, client);
+    const refreshSwitch = accessory.getServiceById(HapService.Switch, 'owntone-refresh-outputs') as Service;
+
+    client.getOutputs.mockRejectedValueOnce(new Error('boom'));
+    await expect(refreshSwitch.getCharacteristic(Characteristic.On).handleSetRequest(true)).resolves.toBeUndefined();
+
+    handler.dispose();
+  });
 });
 
 describe('OwnTonePlatformAccessory — state mapping', () => {
@@ -523,16 +561,28 @@ describe('OwnTonePlatformAccessory — polling', () => {
     handler.dispose();
   });
 
-  it('refreshes outputs roughly once a minute rather than on every poll', async () => {
+  it('fetches outputs once on startup and never again automatically', async () => {
     const { client, handler } = await build();
 
     expect(client.getOutputs).toHaveBeenCalledTimes(1);
 
-    // 11 further polls (55s) stay within the same refresh window.
-    for (let i = 0; i < 11; i++) {
+    for (let i = 0; i < 50; i++) {
       await jest.advanceTimersByTimeAsync(POLL_MS);
     }
     expect(client.getOutputs).toHaveBeenCalledTimes(1);
+
+    handler.dispose();
+  });
+
+  it('retries the initial outputs load on the next poll after a failure', async () => {
+    const client = createFakeClient();
+    client.getOutputs.mockRejectedValueOnce(new Error('bad gateway'));
+
+    const { handler } = await build({}, client);
+    expect(client.getOutputs).toHaveBeenCalledTimes(1);
+
+    await jest.advanceTimersByTimeAsync(POLL_MS);
+    expect(client.getOutputs).toHaveBeenCalledTimes(2);
 
     await jest.advanceTimersByTimeAsync(POLL_MS);
     expect(client.getOutputs).toHaveBeenCalledTimes(2);

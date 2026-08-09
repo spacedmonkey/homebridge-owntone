@@ -1,0 +1,133 @@
+<div class="card">
+  <div class="card-body">
+    <h5 class="card-title mb-1">Connection Test</h5>
+    <p class="card-text text-muted small mb-3">
+      Checks that Homebridge can reach each server's OwnTone JSON API (<code>GET /api/config</code>) and
+      that it answers with HTTP 200. The request is made by Homebridge itself, not your browser.
+    </p>
+    <div id="ownToneTestRows"></div>
+    <p id="ownToneTestEmpty" class="text-muted small mb-0" style="display: none;">
+      Add a server below, then fill in its host, to enable a connection test.
+    </p>
+  </div>
+</div>
+
+<script>
+  (async () => {
+    const rowsEl = document.getElementById('ownToneTestRows');
+    const emptyEl = document.getElementById('ownToneTestEmpty');
+
+    let servers = [];
+
+    function isTestable(server) {
+      const host = typeof server.host === 'string' ? server.host.trim() : '';
+      if (!host) {
+        return false;
+      }
+      if (server.port === undefined || server.port === null || server.port === '') {
+        return true;
+      }
+      const port = Number(server.port);
+      return Number.isInteger(port) && port > 0 && port <= 65535;
+    }
+
+    function render() {
+      rowsEl.innerHTML = '';
+
+      if (servers.length === 0) {
+        emptyEl.style.display = '';
+        return;
+      }
+      emptyEl.style.display = 'none';
+
+      servers.forEach((server, index) => {
+        const testable = isTestable(server);
+        const label = (server.name && server.name.trim()) || `Server ${index + 1}`;
+        const protocol = server.protocol === 'https' ? 'https' : 'http';
+        const port = server.port || 3689;
+
+        const row = document.createElement('div');
+        row.className = 'd-flex align-items-center justify-content-between py-2';
+        if (index < servers.length - 1) {
+          row.style.borderBottom = '1px solid var(--bs-border-color, #dee2e6)';
+        }
+
+        const info = document.createElement('div');
+        info.innerHTML = `
+          <div>${label}</div>
+          <div class="text-muted small">${server.host ? `${protocol}://${server.host}:${port}` : 'No host set'}</div>
+        `;
+
+        const controls = document.createElement('div');
+        controls.className = 'text-end';
+
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'btn btn-sm btn-outline-primary';
+        button.textContent = 'Test Connection';
+        button.disabled = !testable;
+
+        const status = document.createElement('div');
+        status.className = 'small mt-1';
+
+        button.addEventListener('click', async () => {
+          button.disabled = true;
+          const originalText = button.textContent;
+          button.textContent = 'Testing…';
+          status.className = 'small mt-1 text-muted';
+          status.textContent = 'Contacting server…';
+
+          try {
+            const result = await homebridge.request('/testConnection', {
+              protocol,
+              host: server.host,
+              port: Number(server.port) || 3689,
+              timeout: Number(server.timeout) || 5000,
+              username: server.username,
+              password: server.password,
+              bearerToken: server.bearerToken,
+              ignoreCertificateErrors: !!server.ignoreCertificateErrors,
+            });
+
+            if (result.ok) {
+              status.className = 'small mt-1 text-success';
+              status.textContent = `✓ ${result.message}`;
+              homebridge.toast.success(result.message, label);
+            } else {
+              status.className = 'small mt-1 text-danger';
+              status.textContent = `✗ ${result.message}`;
+              homebridge.toast.error(result.message, label);
+            }
+          } catch (error) {
+            const message = (error && error.message) || 'Connection test failed.';
+            status.className = 'small mt-1 text-danger';
+            status.textContent = `✗ ${message}`;
+            homebridge.toast.error(message, label);
+          } finally {
+            button.disabled = !isTestable(server);
+            button.textContent = originalText;
+          }
+        });
+
+        controls.appendChild(button);
+        controls.appendChild(status);
+
+        row.appendChild(info);
+        row.appendChild(controls);
+        rowsEl.appendChild(row);
+      });
+    }
+
+    homebridge.addEventListener('configChanged', (event) => {
+      const blocks = Array.isArray(event.data) ? event.data : [];
+      servers = Array.isArray(blocks[0] && blocks[0].servers) ? blocks[0].servers : [];
+      render();
+    });
+
+    const initialBlocks = await homebridge.getPluginConfig();
+    servers = Array.isArray(initialBlocks[0] && initialBlocks[0].servers) ? initialBlocks[0].servers : [];
+    render();
+
+    homebridge.showSchemaForm();
+  })();
+</script>
