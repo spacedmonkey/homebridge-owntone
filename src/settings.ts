@@ -47,3 +47,19 @@ export const WEBSOCKET_RECONNECT_MIN_DELAY_MS = 2000;
 
 /** Cap on the reconnect backoff delay for the push-notification connection, in ms. */
 export const WEBSOCKET_RECONNECT_MAX_DELAY_MS = 60_000;
+
+/**
+ * Default for the user-configurable `pushReconnectInterval` (minutes): how
+ * often to force-cycle an apparently-healthy push-notification connection.
+ * The reconciliation poll above bounds how stale *data* can get, but a
+ * WebSocket stuck "open" while actually dead never fires close/error, so it
+ * would otherwise sit there for the lifetime of the Homebridge process —
+ * potentially months or years — silently losing the near-instant push
+ * updates it exists for. Periodically forcing a fresh connection bounds
+ * that too, at the cost of a brief, harmless reconnect.
+ */
+export const DEFAULT_PUSH_RECONNECT_INTERVAL_MINUTES = 15;
+
+/** Bounds on the user-configurable `pushReconnectInterval`, in minutes. */
+export const MIN_PUSH_RECONNECT_INTERVAL_MINUTES = 1;
+export const MAX_PUSH_RECONNECT_INTERVAL_MINUTES = 1440;

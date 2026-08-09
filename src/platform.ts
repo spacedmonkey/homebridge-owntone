@@ -14,7 +14,10 @@ import { OwnTonePlatformAccessory } from './platformAccessory';
 import {
   DEFAULT_POLLING_INTERVAL,
   DEFAULT_PORT,
+  DEFAULT_PUSH_RECONNECT_INTERVAL_MINUTES,
   DEFAULT_TIMEOUT,
+  MAX_PUSH_RECONNECT_INTERVAL_MINUTES,
+  MIN_PUSH_RECONNECT_INTERVAL_MINUTES,
   PLATFORM_NAME,
   PLUGIN_NAME,
 } from './settings';
@@ -229,6 +232,12 @@ export function resolveServerConfigs(
       // Defaults to enabled — unlike the booleans above, only an explicit
       // `false` opts out, rather than requiring an explicit `true` to opt in.
       enableWebSocket: entry.enableWebSocket !== false,
+      pushReconnectInterval: positiveInt(
+        entry.pushReconnectInterval,
+        DEFAULT_PUSH_RECONNECT_INTERVAL_MINUTES,
+        MIN_PUSH_RECONNECT_INTERVAL_MINUTES,
+        MAX_PUSH_RECONNECT_INTERVAL_MINUTES,
+      ),
       outputs: resolveOutputs(entry.outputs),
     });
   });

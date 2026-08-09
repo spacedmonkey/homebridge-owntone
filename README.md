@@ -29,6 +29,8 @@ For every OwnTone server you configure, the plugin creates one HomeKit accessory
 
 It polls each server every 5 seconds by default for playback state, now-playing metadata and the list of outputs — except while playback is stopped, when the extra now-playing/outputs requests are skipped since there's nothing new to report. If the server was built with [WebSocket push notification support](https://owntone.github.io/owntone-server/json-api/#push-notifications), the plugin also subscribes to it and reacts to changes immediately instead of waiting for the next poll; the polling interval then backs off to an infrequent safety-net check (every 5 minutes) rather than stopping outright, since a WebSocket can stay open while actually dead. Servers without WebSocket support are unaffected — they just keep polling at the configured interval as before.
 
+If the push connection drops (server restart, network blip), it reconnects automatically with backoff (2s up to 60s between attempts); every connect, disconnect and retry is logged at `info` level with the reason, so this is visible without enabling debug mode. Since Homebridge can run for months, a connection that goes silently dead without ever firing a close/error — which the retry logic above can't detect on its own — is also guarded against: a healthy-looking connection is proactively cycled on a schedule (`pushReconnectInterval`, default 15 minutes) as a safety net, independent of the poll-based one. This only has an effect when push notifications are enabled and the server supports them.
+
 ---
 
 ## Installation
@@ -126,6 +128,8 @@ Above the form, each server gets a **Test Connection** button once its host is f
 | `port` | number | no | `3689` | OwnTone JSON API port |
 | `pollingInterval` | number | no | `5` | Polling interval in seconds (1–3600) |
 | `timeout` | number | no | `5000` | Request timeout in milliseconds (500–120000) |
+| `enableWebSocket` | boolean | no | `true` | Use push notifications when the server supports them, instead of polling only |
+| `pushReconnectInterval` | number | no | `15` | Minutes between proactive reconnects of a healthy push connection (1–1440). Only has an effect when `enableWebSocket` is on and the server supports push notifications |
 | `username` | string | no | — | Optional username for reverse-proxy / basic auth |
 | `password` | string | no | — | Optional password for reverse-proxy / basic auth |
 | `bearerToken` | string | no | — | Optional bearer token; takes precedence over basic auth |
@@ -231,10 +235,10 @@ The plugin is built so that no OwnTone problem can take Homebridge down:
 
 | Level | Used for |
 | --- | --- |
-| `info` | Accessory published, server reachable/recovered, OwnTone version, push notifications active, poll-complete track summary (every poll) |
+| `info` | Accessory published, server reachable/recovered, OwnTone version, poll-complete track summary (every poll), all push notification connect/disconnect/retry events |
 | `warn` | Server unreachable, command failure, unsupported feature, invalid config |
 | `error` | Unexpected setup failures (still non-fatal) |
-| `debug` | Metadata changes, artwork caching, ignored remote keys, skipped polls, push notification connect/reconnect attempts |
+| `debug` | Metadata changes, artwork caching, ignored remote keys, skipped polls, full stack trace alongside a push connection failure |
 
 Enable debug logging with `homebridge -D` or the **Debug Mode** toggle in the Homebridge UI.
 

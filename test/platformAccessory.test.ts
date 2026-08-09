@@ -6,7 +6,7 @@ import type { OwnTonePushClient, OwnTonePushClientOptions } from '../src/owntone
 import type { OwnTonePlatform } from '../src/platform';
 import { OwnTonePlatformAccessory, sanitizeHapName } from '../src/platformAccessory';
 import { serverIdentity } from '../src/platform';
-import { DEFAULT_POLLING_INTERVAL, WEBSOCKET_RECONCILE_INTERVAL_MS } from '../src/settings';
+import { DEFAULT_POLLING_INTERVAL, DEFAULT_PUSH_RECONNECT_INTERVAL_MINUTES, WEBSOCKET_RECONCILE_INTERVAL_MS } from '../src/settings';
 import type { OutputSnapshot, PlayerSnapshot, ResolvedServerConfig, TrackSnapshot } from '../src/types';
 import {
   Characteristic,
@@ -31,6 +31,7 @@ function serverConfig(overrides: Partial<ResolvedServerConfig> = {}): ResolvedSe
     ignoreCertificateErrors: false,
     exposeTrackSwitches: false,
     enableWebSocket: true,
+    pushReconnectInterval: DEFAULT_PUSH_RECONNECT_INTERVAL_MINUTES,
     outputs: [],
     ...overrides,
   };
@@ -135,6 +136,7 @@ interface FakePushClientInstance {
   options: OwnTonePushClientOptions;
   connect: jest.Mock;
   dispose: jest.Mock;
+  reconnect: jest.Mock;
 }
 
 /**
@@ -150,7 +152,7 @@ function createFakePushClientFactory(): {
 } {
   const instances: FakePushClientInstance[] = [];
   const factory = (options: OwnTonePushClientOptions): OwnTonePushClient => {
-    const instance: FakePushClientInstance = { options, connect: jest.fn(), dispose: jest.fn() };
+    const instance: FakePushClientInstance = { options, connect: jest.fn(), dispose: jest.fn(), reconnect: jest.fn() };
     instances.push(instance);
     return instance as unknown as OwnTonePushClient;
   };
@@ -881,14 +883,29 @@ describe('OwnTonePlatformAccessory — push notifications', () => {
     handler.dispose();
   });
 
-  it('does not connect a push client when the server has no websocket port', async () => {
+  it('does not connect a push client when the server has no websocket port, and says so at info level', async () => {
     const client = createFakeClient();
     const { factory, instances } = createFakePushClientFactory();
 
-    const { handler } = await build({}, client, factory);
+    const { handler, log } = await build({}, client, factory);
     await flush();
 
     expect(instances).toHaveLength(0);
+    expect(log.info).toHaveBeenCalledWith(expect.stringContaining('does not advertise WebSocket support'), 'Living Room Music');
+
+    handler.dispose();
+  });
+
+  it('does not connect a push client when websocket_port is 0 (OwnTone\'s documented "not supported" sentinel)', async () => {
+    const client = createFakeClient();
+    client.getConfig.mockResolvedValue({ version: '28.4', websocket_port: 0 });
+    const { factory, instances } = createFakePushClientFactory();
+
+    const { handler, log } = await build({}, client, factory);
+    await flush();
+
+    expect(instances).toHaveLength(0);
+    expect(log.info).toHaveBeenCalledWith(expect.stringContaining('does not advertise WebSocket support'), 'Living Room Music');
 
     handler.dispose();
   });
@@ -951,6 +968,31 @@ describe('OwnTonePlatformAccessory — push notifications', () => {
     handler.dispose();
   });
 
+  it('stays on fast polling the whole time if the push connection never succeeds', async () => {
+    const client = createFakeClient();
+    client.getConfig.mockResolvedValue({ version: '28.4', websocket_port: 3688 });
+    const { factory, instances } = createFakePushClientFactory();
+
+    const { handler } = await build({}, client, factory);
+    await flush();
+    expect(client.getStatus).toHaveBeenCalledTimes(1);
+
+    // Simulate repeated connection failures — onConnectionChange(true) is
+    // never called, only (false), same as OwnTonePushClient does on every
+    // failed attempt. Polling must never back off to the reconciliation
+    // interval in that case.
+    instances[0].options.onConnectionChange(false);
+    instances[0].options.onConnectionChange(false);
+
+    await jest.advanceTimersByTimeAsync(POLL_MS);
+    expect(client.getStatus).toHaveBeenCalledTimes(2);
+
+    await jest.advanceTimersByTimeAsync(POLL_MS);
+    expect(client.getStatus).toHaveBeenCalledTimes(3);
+
+    handler.dispose();
+  });
+
   it('disposes the push client when the accessory is disposed', async () => {
     const client = createFakeClient();
     client.getConfig.mockResolvedValue({ version: '28.4', websocket_port: 3688 });
@@ -962,6 +1004,82 @@ describe('OwnTonePlatformAccessory — push notifications', () => {
     handler.dispose();
 
     expect(instances[0].dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('periodically forces a fresh connection while healthy, to catch a silently-dead socket', async () => {
+    const client = createFakeClient();
+    client.getConfig.mockResolvedValue({ version: '28.4', websocket_port: 3688 });
+    const { factory, instances } = createFakePushClientFactory();
+
+    const { handler } = await build({}, client, factory);
+    await flush();
+
+    instances[0].options.onConnectionChange(true);
+
+    const intervalMs = DEFAULT_PUSH_RECONNECT_INTERVAL_MINUTES * 60_000;
+    await jest.advanceTimersByTimeAsync(intervalMs - 1);
+    expect(instances[0].reconnect).not.toHaveBeenCalled();
+
+    await jest.advanceTimersByTimeAsync(1);
+    expect(instances[0].reconnect).toHaveBeenCalledTimes(1);
+
+    handler.dispose();
+  });
+
+  it('uses the configured pushReconnectInterval instead of the default', async () => {
+    const client = createFakeClient();
+    client.getConfig.mockResolvedValue({ version: '28.4', websocket_port: 3688 });
+    const { factory, instances } = createFakePushClientFactory();
+
+    const { handler } = await build({ pushReconnectInterval: 30 }, client, factory);
+    await flush();
+
+    instances[0].options.onConnectionChange(true);
+
+    // The default (15 min) would have fired by now — it must not have.
+    await jest.advanceTimersByTimeAsync(DEFAULT_PUSH_RECONNECT_INTERVAL_MINUTES * 60_000);
+    expect(instances[0].reconnect).not.toHaveBeenCalled();
+
+    // The configured 30 minutes elapses.
+    await jest.advanceTimersByTimeAsync((30 - DEFAULT_PUSH_RECONNECT_INTERVAL_MINUTES) * 60_000);
+    expect(instances[0].reconnect).toHaveBeenCalledTimes(1);
+
+    handler.dispose();
+  });
+
+  it('stops the periodic refresh once the connection drops, and does not resume it while disconnected', async () => {
+    const client = createFakeClient();
+    client.getConfig.mockResolvedValue({ version: '28.4', websocket_port: 3688 });
+    const { factory, instances } = createFakePushClientFactory();
+
+    const { handler } = await build({}, client, factory);
+    await flush();
+
+    instances[0].options.onConnectionChange(true);
+    instances[0].options.onConnectionChange(false);
+
+    await jest.advanceTimersByTimeAsync(DEFAULT_PUSH_RECONNECT_INTERVAL_MINUTES * 60_000 * 2);
+    expect(instances[0].reconnect).not.toHaveBeenCalled();
+
+    handler.dispose();
+  });
+
+  it('reports the push connection status via isPushConnected', async () => {
+    const client = createFakeClient();
+    client.getConfig.mockResolvedValue({ version: '28.4', websocket_port: 3688 });
+    const { factory, instances } = createFakePushClientFactory();
+
+    const { handler } = await build({}, client, factory);
+    await flush();
+    expect(handler.isPushConnected).toBe(false);
+
+    instances[0].options.onConnectionChange(true);
+    expect(handler.isPushConnected).toBe(true);
+
+    instances[0].options.onConnectionChange(false);
+    expect(handler.isPushConnected).toBe(false);
+
+    handler.dispose();
   });
 });
 

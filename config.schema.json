@@ -84,6 +84,15 @@
               "default": true,
               "required": false
             },
+            "pushReconnectInterval": {
+              "title": "Push Reconnect Interval (minutes)",
+              "description": "How often to proactively reconnect an already-healthy push notification connection, to catch one that has silently died without disconnecting — useful since Homebridge may run for months between restarts. Only has an effect when Use Push Notifications is on and the server actually supports it.",
+              "type": "integer",
+              "default": 15,
+              "required": false,
+              "minimum": 1,
+              "maximum": 1440
+            },
             "exposeTrackSwitches": {
               "title": "Expose Next/Previous/Play-Pause Switches",
               "description": "Adds stateless switches for next track, previous track and play/pause. Useful for automations and when the Apple Remote mapping is not enough.",
@@ -166,6 +175,7 @@
             { "key": "servers[].timeout", "type": "number" },
             { "key": "servers[].pollingInterval", "type": "number" },
             "servers[].enableWebSocket",
+            { "key": "servers[].pushReconnectInterval", "type": "number" },
             "servers[].exposeTrackSwitches",
             "servers[].ignoreCertificateErrors",
             "servers[].username",

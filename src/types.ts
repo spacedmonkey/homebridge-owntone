@@ -23,6 +23,12 @@ export interface OwnToneServerConfig {
   exposeTrackSwitches?: boolean;
   /** Whether to use the server's push-notification WebSocket, when it advertises one. Defaults to `true`. */
   enableWebSocket?: boolean;
+  /**
+   * Minutes between proactive reconnects of an already-healthy push
+   * WebSocket. Only applies when `enableWebSocket` is on (and the server
+   * actually supports push) — has no effect otherwise. Defaults to 15.
+   */
+  pushReconnectInterval?: number;
   /** Outputs cached by the "Refresh Outputs" button in the custom UI. */
   outputs?: OutputSnapshot[];
 }
@@ -52,6 +58,8 @@ export interface ResolvedServerConfig {
   exposeTrackSwitches: boolean;
   /** Whether to use the server's push-notification WebSocket, when it advertises one. */
   enableWebSocket: boolean;
+  /** Minutes between proactive reconnects of an already-healthy push WebSocket. Only applies when `enableWebSocket` is on. */
+  pushReconnectInterval: number;
   /** Outputs cached by the "Refresh Outputs" button in the custom UI, validated and defaulted to `[]`. */
   outputs: OutputSnapshot[];
 }

@@ -80,6 +80,7 @@ export class OwnTonePlatformAccessory {
   private consecutiveFailures = 0;
   private pushClient?: OwnTonePushClient;
   private wsConnected = false;
+  private pushRefreshTimer?: NodeJS.Timeout;
 
   private reachable = false;
   private player?: PlayerSnapshot;
@@ -127,6 +128,10 @@ export class OwnTonePlatformAccessory {
       clearInterval(this.pollTimer);
       this.pollTimer = undefined;
     }
+    if (this.pushRefreshTimer) {
+      clearInterval(this.pushRefreshTimer);
+      this.pushRefreshTimer = undefined;
+    }
     for (const timer of this.switchTimers) {
       clearTimeout(timer);
     }
@@ -147,6 +152,11 @@ export class OwnTonePlatformAccessory {
   /** `true` while the OwnTone server is answering polls. */
   get isReachable(): boolean {
     return this.reachable;
+  }
+
+  /** `true` while the push-notification WebSocket is connected. Always `false` if the server doesn't support it or `enableWebSocket` is off. */
+  get isPushConnected(): boolean {
+    return this.wsConnected;
   }
 
   /* -------------------------------------------------------------------- *
@@ -766,11 +776,13 @@ export class OwnTonePlatformAccessory {
   }
 
   /**
-   * Connects the push-notification WebSocket when the server advertises
-   * support for it (`websocket_port` in `/api/config`). Servers without
-   * websocket support simply have no `websocket_port`, so this is a no-op
-   * for them — behaviour stays exactly as it was before push support
-   * existed, i.e. polling at `config.pollingInterval`.
+   * Connects the push-notification WebSocket when `/api/config` says the
+   * server supports it. Per OwnTone's JSON API docs, `websocket_port` is
+   * always present in that response — it's `0` when the server wasn't
+   * built with (or has disabled) websocket support, and the actual port
+   * otherwise. Either way this is a one-time check at startup: servers
+   * without support just fall back to polling at `config.pollingInterval`,
+   * identical to before push support existed.
    */
   private connectPushClientIfSupported(config: OwnToneConfigResponse): void {
     if (!this.config.enableWebSocket) {
@@ -780,6 +792,7 @@ export class OwnTonePlatformAccessory {
 
     const port = config.websocket_port;
     if (!Number.isInteger(port) || (port as number) <= 0) {
+      this.platform.log.info('"%s": OwnTone server does not advertise WebSocket support; using polling only.', this.config.name);
       return;
     }
 
@@ -802,6 +815,25 @@ export class OwnTonePlatformAccessory {
     }
     this.wsConnected = connected;
     this.restartPollTimer();
+
+    if (this.pushRefreshTimer) {
+      clearInterval(this.pushRefreshTimer);
+      this.pushRefreshTimer = undefined;
+    }
+
+    if (connected) {
+      // Belt-and-suspenders for a process that may run for months: forces a
+      // fresh connection periodically, since a socket stuck "open" while
+      // actually dead never fires close/error and would otherwise never be
+      // detected (see OwnTonePushClient.reconnect()). User-configurable via
+      // pushReconnectInterval — has no effect at all while disconnected,
+      // since it's only (re)started here, on transitioning to connected.
+      const intervalMs = this.config.pushReconnectInterval * 60_000;
+      this.pushRefreshTimer = setInterval(() => this.pushClient?.reconnect(), intervalMs);
+      if (typeof this.pushRefreshTimer.unref === 'function') {
+        this.pushRefreshTimer.unref();
+      }
+    }
   }
 
   /* -------------------------------------------------------------------- *

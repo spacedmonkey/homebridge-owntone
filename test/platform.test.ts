@@ -60,6 +60,7 @@ describe('resolveServerConfigs', () => {
       ignoreCertificateErrors: false,
       exposeTrackSwitches: false,
       enableWebSocket: true,
+      pushReconnectInterval: 15,
       outputs: [],
     });
   });
@@ -77,6 +78,22 @@ describe('resolveServerConfigs', () => {
     );
 
     expect(servers.map((server) => server.enableWebSocket)).toEqual([true, true, false]);
+  });
+
+  it('defaults pushReconnectInterval to 15 minutes, uses a valid explicit value, and clamps out-of-range ones', () => {
+    const servers = resolveServerConfigs(
+      {
+        servers: [
+          { name: 'A', host: 'a' },
+          { name: 'B', host: 'b', pushReconnectInterval: 30 },
+          { name: 'C', host: 'c', pushReconnectInterval: 0 },
+          { name: 'D', host: 'd', pushReconnectInterval: 5000 },
+        ],
+      } as OwnTonePlatformConfig,
+      log,
+    );
+
+    expect(servers.map((server) => server.pushReconnectInterval)).toEqual([15, 30, 1, 1440]);
   });
 
   it('uses the default polling interval when it is omitted or unusable', () => {

@@ -1,16 +1,22 @@
 import type { Logging } from 'homebridge';
 
-import { ErrorThrottle } from './errorThrottle';
 import { WEBSOCKET_RECONNECT_MAX_DELAY_MS, WEBSOCKET_RECONNECT_MIN_DELAY_MS } from './settings';
 
 /** `notify` categories documented at https://owntone.github.io/owntone-server/json-api/#push-notifications. */
 export type OwnTonePushCategory = 'update' | 'database' | 'outputs' | 'player' | 'options' | 'volume' | 'queue';
 
+/** The subset of a WHATWG `CloseEvent` this client logs for diagnostics. */
+export interface WebSocketCloseEventLike {
+  code?: number;
+  reason?: string;
+  wasClean?: boolean;
+}
+
 /** Minimal slice of the WHATWG WebSocket API this client relies on; injectable for tests. */
 export interface WebSocketLike {
   onopen: (() => void) | null;
   onmessage: ((event: { data: unknown }) => void) | null;
-  onclose: (() => void) | null;
+  onclose: ((event: WebSocketCloseEventLike) => void) | null;
   onerror: ((event: unknown) => void) | null;
   send(data: string): void;
   close(): void;
@@ -34,6 +40,12 @@ export interface OwnTonePushClientOptions {
    */
   onEvent: () => void;
   onConnectionChange: (connected: boolean) => void;
+  /**
+   * Connect, disconnect and retry events are all logged at `info` (never
+   * `debug`/`warn`) so they're visible without enabling debug mode — this
+   * is the only way to tell, over a Homebridge process that may run for
+   * months, whether push notifications are actually working.
+   */
   log: Pick<Logging, 'debug' | 'info'>;
   /** Injectable for tests; defaults to undici's `WebSocket`. */
   webSocketImpl?: WebSocketCtor;
@@ -51,14 +63,17 @@ export interface OwnTonePushClientOptions {
  * polling rather than treating this as fatal.
  */
 export class OwnTonePushClient {
-  private readonly throttle = new ErrorThrottle();
   private socket?: WebSocketLike;
   private disposed = false;
   private reconnectTimer?: NodeJS.Timeout;
   private reconnectDelayMs: number = WEBSOCKET_RECONNECT_MIN_DELAY_MS;
   private everConnected = false;
+  private connected = false;
+  private url: string;
 
-  constructor(private readonly options: OwnTonePushClientOptions) {}
+  constructor(private readonly options: OwnTonePushClientOptions) {
+    this.url = `${options.protocol}://${options.host}:${options.port}`;
+  }
 
   /** Open the connection. Safe to call again after `dispose()`. */
   connect(): void {
@@ -66,7 +81,7 @@ export class OwnTonePushClient {
       return;
     }
 
-    const url = `${this.options.protocol}://${this.options.host}:${this.options.port}`;
+    const url = this.url;
     const WebSocketImpl = this.options.webSocketImpl ?? defaultWebSocketCtor();
 
     if (!WebSocketImpl) {
@@ -85,11 +100,11 @@ export class OwnTonePushClient {
     this.socket = socket;
 
     socket.onopen = () => {
+      this.connected = true;
       this.reconnectDelayMs = WEBSOCKET_RECONNECT_MIN_DELAY_MS;
-      this.throttle.reset('connect');
 
       if (this.everConnected) {
-        this.options.log.debug('Push notification connection to %s re-established.', url);
+        this.options.log.info('Push notification connection to %s re-established.', url);
       } else {
         this.everConnected = true;
         this.options.log.info('Push notifications active (%s).', url);
@@ -100,7 +115,7 @@ export class OwnTonePushClient {
       try {
         socket.send(JSON.stringify({ notify: this.options.categories }));
       } catch (error) {
-        this.options.log.debug('Failed to send push notification subscription: %s', describeError(error));
+        this.options.log.debug('Failed to send push notification subscription: %s', describeFailure(error));
       }
     };
 
@@ -112,9 +127,32 @@ export class OwnTonePushClient {
       this.handleDisconnect(event);
     };
 
-    socket.onclose = () => {
-      this.handleDisconnect(undefined);
+    socket.onclose = (event) => {
+      this.handleDisconnect(event);
     };
+  }
+
+  /** Whether the connection is currently open. */
+  get isConnected(): boolean {
+    return this.connected;
+  }
+
+  /**
+   * Force-closes and reopens the connection, even if it currently looks
+   * fine. There's no ping/pong control exposed by the WHATWG WebSocket API
+   * this client is built on, so a connection stuck "open" while actually
+   * dead can't be detected directly — this is the way to periodically rule
+   * that out (see `WEBSOCKET_REFRESH_INTERVAL_MS`) or to force a retry on
+   * demand. A no-op if not currently connected — the existing reconnect
+   * backoff already owns that case.
+   */
+  reconnect(): void {
+    if (this.disposed || !this.connected) {
+      return;
+    }
+
+    this.detachSocket()?.close();
+    this.connect();
   }
 
   /** Stop reconnecting and close the socket. Idempotent. */
@@ -145,6 +183,7 @@ export class OwnTonePushClient {
   }
 
   private handleDisconnect(error: unknown): void {
+    this.connected = false;
     this.detachSocket();
     this.options.onConnectionChange(false);
 
@@ -152,11 +191,25 @@ export class OwnTonePushClient {
       return;
     }
 
-    this.throttle.log(
-      'connect',
-      (message) => this.options.log.debug(message),
-      `Push notification connection unavailable: ${describeError(error)}. Falling back to polling and retrying in the background.`,
+    // info, not warn/debug: connect/disconnect/retry are all always visible
+    // without enabling debug mode — this is the only way to tell, over a
+    // Homebridge process that may run for months, whether push notifications
+    // are actually working. Not throttled either, so every attempt shows up.
+    // Polling is unaffected either way — onConnectionChange(false) above
+    // means the poll timer is already at (or reverts to) the fast configured
+    // interval, same as if push had never been available at all.
+    this.options.log.info(
+      'Push notification connection to %s unavailable: %s. Falling back to polling.',
+      this.url,
+      describeFailure(error),
     );
+
+    // The full stack is genuinely useful for diagnosing *why* (DNS, refused,
+    // TLS, etc.) but is too noisy for the info summary line above, so it's
+    // only surfaced at debug.
+    if (error instanceof Error && error.stack) {
+      this.options.log.debug(error.stack);
+    }
 
     this.scheduleReconnect();
   }
@@ -168,6 +221,8 @@ export class OwnTonePushClient {
 
     const delay = this.reconnectDelayMs;
     this.reconnectDelayMs = Math.min(this.reconnectDelayMs * 2, WEBSOCKET_RECONNECT_MAX_DELAY_MS);
+
+    this.options.log.info('Retrying push notification connection to %s in %dms.', this.url, delay);
 
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
@@ -200,9 +255,47 @@ function defaultWebSocketCtor(): WebSocketCtor | undefined {
   }
 }
 
-function describeError(error: unknown): string {
+/**
+ * Best-effort description of whatever `onerror`/`onclose` handed us. Neither
+ * is guaranteed to be a real `Error` — a WHATWG `CloseEvent` carries `code`/
+ * `reason`/`wasClean` instead of a message, and a plain `error` `Event`
+ * often carries no detail at all beyond its `type` — so this pulls out
+ * whatever fields are actually present rather than falling through to an
+ * unhelpful `String(event)` (typically `"[object Event]"`).
+ */
+function describeFailure(error: unknown): string {
   if (error === undefined) {
     return 'connection closed';
   }
-  return error instanceof Error ? error.message : String(error);
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (error && typeof error === 'object') {
+    const candidate = error as { type?: unknown; code?: unknown; reason?: unknown; message?: unknown; error?: unknown };
+    const parts: string[] = [];
+
+    if (typeof candidate.type === 'string') {
+      parts.push(candidate.type);
+    }
+    if (typeof candidate.code === 'number') {
+      parts.push(`code ${candidate.code}`);
+    }
+    if (typeof candidate.reason === 'string' && candidate.reason) {
+      parts.push(candidate.reason);
+    }
+    if (typeof candidate.message === 'string' && candidate.message) {
+      parts.push(candidate.message);
+    }
+    if (candidate.error instanceof Error) {
+      parts.push(candidate.error.message);
+    }
+
+    if (parts.length > 0) {
+      return parts.join(', ');
+    }
+  }
+
+  return String(error);
 }
