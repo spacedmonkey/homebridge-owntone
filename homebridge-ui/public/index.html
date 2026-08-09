@@ -43,24 +43,23 @@
   .owntone-status.owntone-status-pending { opacity: 0.7; }
 </style>
 
-<div class="owntone-panel">
+<div id="ownTonePanel" class="owntone-panel" style="display: none;">
   <h5 style="margin: 0 0 0.25rem;">Connection Test</h5>
   <p class="owntone-subtle" style="margin-bottom: 0.75rem;">
     Checks that Homebridge can reach each server's OwnTone JSON API (<code>GET /api/config</code>) and
     that it answers with HTTP 200. The request is made by Homebridge itself, not your browser.
   </p>
   <div id="ownToneTestRows"></div>
-  <p id="ownToneTestEmpty" class="owntone-subtle" style="margin: 0; display: none;">
-    Add a server below, then fill in its host, to enable a connection test.
-  </p>
 </div>
 
 <script>
   (async () => {
+    const panelEl = document.getElementById('ownTonePanel');
     const rowsEl = document.getElementById('ownToneTestRows');
-    const emptyEl = document.getElementById('ownToneTestEmpty');
 
     let servers = [];
+    let testingCount = 0;
+    let renderedSignature = null;
 
     function isTestable(server) {
       const host = typeof server.host === 'string' ? server.host.trim() : '';
@@ -74,14 +73,20 @@
       return Number.isInteger(port) && port > 0 && port <= 65535;
     }
 
+    function serversFromBlocks(blocks) {
+      return Array.isArray(blocks) && Array.isArray(blocks[0] && blocks[0].servers) ? blocks[0].servers : [];
+    }
+
+    // Renders rows in exactly the order `servers` lists them, which is the
+    // order they appear (and were added) in the schema form's server array.
     function render() {
       rowsEl.innerHTML = '';
 
       if (servers.length === 0) {
-        emptyEl.style.display = '';
+        panelEl.style.display = 'none';
         return;
       }
-      emptyEl.style.display = 'none';
+      panelEl.style.display = '';
 
       servers.forEach((server, index) => {
         const testable = isTestable(server);
@@ -111,6 +116,7 @@
         status.className = 'owntone-status';
 
         button.addEventListener('click', async () => {
+          testingCount += 1;
           button.disabled = true;
           const originalText = button.textContent;
           button.textContent = 'Testing…';
@@ -144,6 +150,7 @@
             status.textContent = `✗ ${message}`;
             homebridge.toast.error(message, label);
           } finally {
+            testingCount = Math.max(0, testingCount - 1);
             button.disabled = !isTestable(server);
             button.textContent = originalText;
           }
@@ -158,11 +165,39 @@
       });
     }
 
-    homebridge.addEventListener('configChanged', (event) => {
-      const blocks = Array.isArray(event.data) ? event.data : [];
-      servers = Array.isArray(blocks[0] && blocks[0].servers) ? blocks[0].servers : [];
+    function applyServers(next) {
+      const signature = JSON.stringify(next);
+      if (signature === renderedSignature) {
+        return;
+      }
+      renderedSignature = signature;
+      servers = next;
       render();
+    }
+
+    // The schema form's `configChanged` push event should fire on every
+    // edit, including adding/removing servers, but it's debounced and can
+    // be skipped by Homebridge UI's own refresh cycle — so it's treated as
+    // a fast path, not the only source of truth. `syncFromHomebridge` below
+    // polls the real config as a fallback so the list never goes stale.
+    homebridge.addEventListener('configChanged', (event) => {
+      if (testingCount > 0) {
+        return;
+      }
+      applyServers(serversFromBlocks(Array.isArray(event.data) ? event.data : []));
     });
+
+    async function syncFromHomebridge() {
+      if (testingCount > 0) {
+        return;
+      }
+      try {
+        const blocks = await homebridge.getPluginConfig();
+        applyServers(serversFromBlocks(blocks));
+      } catch (error) {
+        console.error('OwnTone custom UI failed to refresh plugin config', error);
+      }
+    }
 
     try {
       let blocks = await homebridge.getPluginConfig();
@@ -176,12 +211,13 @@
         await homebridge.updatePluginConfig(blocks);
       }
 
-      servers = Array.isArray(blocks[0] && blocks[0].servers) ? blocks[0].servers : [];
-      render();
+      applyServers(serversFromBlocks(blocks));
     } catch (error) {
       console.error('OwnTone custom UI failed to load plugin config', error);
     }
 
     homebridge.showSchemaForm();
+
+    setInterval(syncFromHomebridge, 1500);
   })();
 </script>
