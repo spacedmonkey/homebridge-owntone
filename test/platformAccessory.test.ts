@@ -608,7 +608,7 @@ describe('OwnTonePlatformAccessory — polling', () => {
     handler.dispose();
   });
 
-  it('fetches outputs once on startup and never again automatically', async () => {
+  it('fetches outputs on every poll, same cadence as player/track state', async () => {
     const { client, handler } = await build();
 
     expect(client.getOutputs).toHaveBeenCalledTimes(1);
@@ -616,12 +616,12 @@ describe('OwnTonePlatformAccessory — polling', () => {
     for (let i = 0; i < 50; i++) {
       await jest.advanceTimersByTimeAsync(POLL_MS);
     }
-    expect(client.getOutputs).toHaveBeenCalledTimes(1);
+    expect(client.getOutputs).toHaveBeenCalledTimes(51);
 
     handler.dispose();
   });
 
-  it('retries the initial outputs load on the next poll after a failure', async () => {
+  it('recovers on the next poll after an outputs fetch failure', async () => {
     const client = createFakeClient();
     client.getOutputs.mockRejectedValueOnce(new Error('bad gateway'));
 
@@ -632,7 +632,28 @@ describe('OwnTonePlatformAccessory — polling', () => {
     expect(client.getOutputs).toHaveBeenCalledTimes(2);
 
     await jest.advanceTimersByTimeAsync(POLL_MS);
-    expect(client.getOutputs).toHaveBeenCalledTimes(2);
+    expect(client.getOutputs).toHaveBeenCalledTimes(3);
+
+    handler.dispose();
+  });
+
+  it('updates the active identifier when the selected output changes between polls', async () => {
+    const client = createFakeClient();
+    client.getOutputs.mockResolvedValue(outputs());
+
+    const { television, handler } = await build({}, client);
+
+    // Kitchen (index 0 → identifier 2) is selected initially.
+    expect(television.getCharacteristic(Characteristic.ActiveIdentifier).value).toBe(2);
+
+    client.getOutputs.mockResolvedValue([
+      { id: '123', name: 'Kitchen', type: 'AirPlay', selected: false, volume: 50 },
+      { id: '456', name: 'Study', type: 'AirPlay', selected: true, volume: 20 },
+    ]);
+    await jest.advanceTimersByTimeAsync(POLL_MS);
+
+    // Study (index 1 → identifier 3) is now selected.
+    expect(television.getCharacteristic(Characteristic.ActiveIdentifier).value).toBe(3);
 
     handler.dispose();
   });

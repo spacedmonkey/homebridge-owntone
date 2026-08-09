@@ -67,7 +67,6 @@ export class OwnTonePlatformAccessory {
   private polling = false;
   private disposed = false;
   private consecutiveFailures = 0;
-  private outputsLoaded = false;
 
   private reachable = false;
   private player?: PlayerSnapshot;
@@ -288,10 +287,9 @@ export class OwnTonePlatformAccessory {
   }
 
   /**
-   * OwnTone outputs are only auto-discovered once, on the first poll after
-   * startup — after that the list is cached indefinitely. This switch is the
-   * only way to pick up outputs that were added or removed later without
-   * restarting Homebridge.
+   * Outputs are already refreshed on every poll (see `poll()`); this switch
+   * just forces that refresh to happen immediately instead of waiting for
+   * the next cycle, e.g. right after adding an output on the server.
    */
   private configureRefreshOutputsSwitch(): void {
     this.addTrackSwitch('owntone-refresh-outputs', 'Refresh Outputs', () => this.refreshOutputsNow());
@@ -299,7 +297,6 @@ export class OwnTonePlatformAccessory {
 
   private async refreshOutputsNow(): Promise<void> {
     const outputs = await this.client.getOutputs();
-    this.outputsLoaded = true;
     this.syncInputSources(outputs);
     this.pushStateToHomeKit();
   }
@@ -503,17 +500,14 @@ export class OwnTonePlatformAccessory {
         this.throttle.log('nowplaying', (message) => this.platform.log.debug(message), `"${this.config.name}": could not read now-playing metadata: ${describeError(error)}`);
       }
 
-      // Outputs rarely change once discovered, so they are only fetched
-      // automatically on the very first poll; after that the cached list is
-      // kept indefinitely and only replaced via the "Refresh Outputs" switch.
+      // Refreshed every poll, same cadence as player/track state, so the
+      // active HomeKit input tracks the currently-selected output even when
+      // it's changed outside Homebridge (e.g. from the OwnTone web UI).
       let outputs: OutputSnapshot[] | undefined;
-      if (!this.outputsLoaded) {
-        try {
-          outputs = await this.client.getOutputs();
-          this.outputsLoaded = true;
-        } catch (error) {
-          this.throttle.log('outputs', (message) => this.platform.log.debug(message), `"${this.config.name}": could not read outputs: ${describeError(error)}`);
-        }
+      try {
+        outputs = await this.client.getOutputs();
+      } catch (error) {
+        this.throttle.log('outputs', (message) => this.platform.log.debug(message), `"${this.config.name}": could not read outputs: ${describeError(error)}`);
       }
 
       this.onPollSuccess(player, track, outputs);
