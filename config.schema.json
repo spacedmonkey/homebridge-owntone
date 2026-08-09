@@ -136,30 +136,15 @@
           "buttonText": "Add OwnTone Server",
           "items": [
             "servers[].name",
-            {
-              "type": "flex",
-              "flex-flow": "row wrap",
-              "items": [
-                "servers[].protocol",
-                "servers[].host"
-              ]
-            },
-            {
-              "type": "flex",
-              "flex-flow": "row wrap",
-              "items": [
-                { "key": "servers[].port", "type": "number" },
-                { "key": "servers[].timeout", "type": "number" }
-              ]
-            },
+            "servers[].protocol",
+            "servers[].host",
+            { "key": "servers[].port", "type": "number" },
+            { "key": "servers[].timeout", "type": "number" },
             { "key": "servers[].pollingInterval", "type": "number" },
             "servers[].exposeTrackSwitches",
             "servers[].ignoreCertificateErrors",
-            {
-              "type": "flex",
-              "flex-flow": "row wrap",
-              "items": ["servers[].username", "servers[].password"]
-            },
+            "servers[].username",
+            "servers[].password",
             "servers[].bearerToken"
           ]
         }
