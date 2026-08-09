@@ -274,7 +274,7 @@ Every entry in `servers` was rejected. The preceding `warn` lines say exactly wh
 ## Development
 
 ```bash
-git clone https://github.com/homebridge-owntone/homebridge-owntone.git
+git clone https://github.com/spacedmonkey/homebridge-owntone.git
 cd homebridge-owntone
 npm install
 npm run build

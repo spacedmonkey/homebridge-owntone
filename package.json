@@ -4,18 +4,22 @@
   "version": "1.0.0",
   "description": "Homebridge dynamic platform plugin that exposes OwnTone (forked-daapd) servers as HomeKit Television-style media accessories.",
   "license": "Apache-2.0",
-  "author": "homebridge-owntone contributors",
+  "author": {
+    "name": "Jonny Harris",
+    "email": "spacedmonkey2@gmail.com",
+    "url": "https://github.com/spacedmonkey"
+  },
   "type": "commonjs",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/homebridge-owntone/homebridge-owntone.git"
+    "url": "git+https://github.com/spacedmonkey/homebridge-owntone.git"
   },
   "bugs": {
-    "url": "https://github.com/homebridge-owntone/homebridge-owntone/issues"
+    "url": "https://github.com/spacedmonkey/homebridge-owntone/issues"
   },
-  "homepage": "https://github.com/homebridge-owntone/homebridge-owntone#readme",
+  "homepage": "https://github.com/spacedmonkey/homebridge-owntone#readme",
   "keywords": [
     "homebridge-plugin",
     "owntone",
