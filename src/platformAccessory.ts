@@ -477,22 +477,28 @@ export class OwnTonePlatformAccessory {
       const player = await this.client.getStatus();
 
       let track: TrackSnapshot | undefined;
-      try {
-        track = await this.client.getNowPlaying();
-      } catch (error) {
-        // Metadata is optional — a failure here must not mark the whole
-        // server unreachable.
-        this.throttle.log('nowplaying', (message) => this.platform.log.debug(message), `"${this.config.name}": could not read now-playing metadata: ${describeError(error)}`);
-      }
-
-      // Refreshed every poll, same cadence as player/track state, so the
-      // active HomeKit input tracks the currently-selected output even when
-      // it's changed outside Homebridge (e.g. from the OwnTone web UI).
       let outputs: OutputSnapshot[] | undefined;
-      try {
-        outputs = await this.client.getOutputs();
-      } catch (error) {
-        this.throttle.log('outputs', (message) => this.platform.log.debug(message), `"${this.config.name}": could not read outputs: ${describeError(error)}`);
+
+      // Stopped means nothing is playing and there's nothing new to say
+      // about which output is in use, so skip both extra requests — one
+      // round trip to OwnTone instead of three, every poll.
+      if (player.state !== 'stop') {
+        try {
+          track = await this.client.getNowPlaying();
+        } catch (error) {
+          // Metadata is optional — a failure here must not mark the whole
+          // server unreachable.
+          this.throttle.log('nowplaying', (message) => this.platform.log.debug(message), `"${this.config.name}": could not read now-playing metadata: ${describeError(error)}`);
+        }
+
+        // Refreshed every poll, same cadence as player/track state, so the
+        // active HomeKit input tracks the currently-selected output even when
+        // it's changed outside Homebridge (e.g. from the OwnTone web UI).
+        try {
+          outputs = await this.client.getOutputs();
+        } catch (error) {
+          this.throttle.log('outputs', (message) => this.platform.log.debug(message), `"${this.config.name}": could not read outputs: ${describeError(error)}`);
+        }
       }
 
       this.onPollSuccess(player, track, outputs);
@@ -647,7 +653,7 @@ export class OwnTonePlatformAccessory {
     }
     this.artworkTrackKey = key;
 
-    const url = this.client.resolveArtworkUrl(this.track?.artworkUrl);
+      const url = this.client.resolveArtworkUrl(this.track?.artworkUrl);
     if (!url) {
       this.artwork = undefined;
       return;

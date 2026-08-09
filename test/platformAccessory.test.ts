@@ -592,6 +592,39 @@ describe('OwnTonePlatformAccessory — polling', () => {
     handler.dispose();
   });
 
+  it('skips fetching now-playing and outputs while stopped', async () => {
+    const client = createFakeClient();
+    client.getStatus.mockResolvedValue(playing({ state: 'stop' }));
+
+    const { handler } = await build({}, client);
+
+    expect(client.getNowPlaying).not.toHaveBeenCalled();
+    expect(client.getOutputs).not.toHaveBeenCalled();
+
+    await jest.advanceTimersByTimeAsync(POLL_MS);
+    await jest.advanceTimersByTimeAsync(POLL_MS);
+
+    expect(client.getNowPlaying).not.toHaveBeenCalled();
+    expect(client.getOutputs).not.toHaveBeenCalled();
+
+    handler.dispose();
+  });
+
+  it('resumes fetching now-playing and outputs once playback starts', async () => {
+    const client = createFakeClient();
+    client.getStatus.mockResolvedValue(playing({ state: 'stop' }));
+
+    const { handler } = await build({}, client);
+
+    client.getStatus.mockResolvedValue(playing({ state: 'play' }));
+    await jest.advanceTimersByTimeAsync(POLL_MS);
+
+    expect(client.getNowPlaying).toHaveBeenCalledTimes(1);
+    expect(client.getOutputs).toHaveBeenCalledTimes(1);
+
+    handler.dispose();
+  });
+
   it('does not start a second poll while one is still running', async () => {
     const client = createFakeClient();
     let release: (() => void) | undefined;
