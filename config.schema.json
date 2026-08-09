@@ -143,8 +143,6 @@
             {
               "type": "fieldset",
               "title": "Advanced",
-              "expandable": true,
-              "expanded": false,
               "items": [
                 {
                   "type": "flex",
@@ -161,8 +159,6 @@
             {
               "type": "fieldset",
               "title": "Authentication (optional)",
-              "expandable": true,
-              "expanded": false,
               "items": [
                 {
                   "type": "flex",
