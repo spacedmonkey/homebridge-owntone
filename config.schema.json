@@ -26,6 +26,7 @@
               "title": "Accessory Name",
               "description": "Name shown in the Home app, e.g. \"Living Room Music\".",
               "type": "string",
+              "default": "",
               "required": true,
               "minLength": 1,
               "maxLength": 64
@@ -44,6 +45,7 @@
               "title": "Host",
               "description": "Hostname or IP address of the OwnTone server, e.g. 192.168.1.50 or owntone.local.",
               "type": "string",
+              "default": "",
               "required": true,
               "minLength": 1,
               "format": "hostname"
@@ -93,12 +95,14 @@
               "title": "Username",
               "description": "Optional. Only needed when OwnTone sits behind a reverse proxy that requires HTTP basic authentication.",
               "type": "string",
+              "default": "",
               "required": false
             },
             "password": {
               "title": "Password",
               "description": "Optional. Used together with the username for HTTP basic authentication.",
               "type": "string",
+              "default": "",
               "required": false,
               "x-schema-form": {
                 "type": "password"
@@ -108,6 +112,7 @@
               "title": "Bearer Token",
               "description": "Optional. Sent as an Authorization: Bearer header. Takes precedence over username/password.",
               "type": "string",
+              "default": "",
               "required": false,
               "x-schema-form": {
                 "type": "password"
