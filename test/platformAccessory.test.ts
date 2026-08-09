@@ -29,6 +29,7 @@ function serverConfig(overrides: Partial<ResolvedServerConfig> = {}): ResolvedSe
     timeout: 5000,
     ignoreCertificateErrors: false,
     exposeTrackSwitches: false,
+    outputs: [],
     ...overrides,
   };
 }
@@ -238,6 +239,30 @@ describe('OwnTonePlatformAccessory — services', () => {
     const { speaker, handler } = await build();
 
     expect(speaker.getCharacteristic(Characteristic.VolumeControlType).value).toBe(Characteristic.VolumeControlType.ABSOLUTE);
+    handler.dispose();
+  });
+
+  it('seeds input sources from the config outputs cache before the first poll resolves', async () => {
+    const resolved = serverConfig({
+      outputs: [{ id: '789', name: 'Garage', type: 'AirPlay', selected: false, volume: 0 }],
+    });
+    const api = createMockApi();
+    const log = createMockLog();
+    const platform = { Service: HapService, Characteristic, api, log } as unknown as OwnTonePlatform;
+    const accessory = createAccessory(resolved.name, serverIdentity(resolved));
+    const client = createFakeClient();
+
+    const handler = new OwnTonePlatformAccessory(platform, accessory, resolved, client as unknown as OwnToneClient);
+
+    // No await/flush yet — the seeded input must exist synchronously, from
+    // the config cache, not from the (still-pending) first live poll.
+    const inputs = accessory.services.filter((service) => service.UUID === HapService.InputSource.UUID);
+    expect(inputs.map((service) => service.getCharacteristic(Characteristic.ConfiguredName).value)).toEqual([
+      'OwnTone',
+      'Garage AirPlay',
+    ]);
+
+    await flush();
     handler.dispose();
   });
 

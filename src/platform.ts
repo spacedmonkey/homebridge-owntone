@@ -18,7 +18,7 @@ import {
   PLATFORM_NAME,
   PLUGIN_NAME,
 } from './settings';
-import type { OwnTonePlatformConfig, OwnToneServerConfig, ResolvedServerConfig } from './types';
+import type { OutputSnapshot, OwnTonePlatformConfig, OwnToneServerConfig, ResolvedServerConfig } from './types';
 
 /**
  * Homebridge dynamic platform for OwnTone.
@@ -226,6 +226,7 @@ export function resolveServerConfigs(
       bearerToken: nonEmpty(entry.bearerToken),
       ignoreCertificateErrors: entry.ignoreCertificateErrors === true,
       exposeTrackSwitches: entry.exposeTrackSwitches === true,
+      outputs: resolveOutputs(entry.outputs),
     });
   });
 
@@ -242,6 +243,44 @@ function positiveInt(value: unknown, fallback: number, min: number, max: number)
 
 function nonEmpty(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+}
+
+/**
+ * Validate the `outputs` cache written by the custom UI's "Refresh Outputs"
+ * button. Malformed or hand-edited entries are dropped rather than rejected,
+ * since this is a best-effort seed for the initial InputSource list, not a
+ * required field.
+ */
+function resolveOutputs(value: unknown): OutputSnapshot[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const outputs: OutputSnapshot[] = [];
+
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object') {
+      continue;
+    }
+
+    const candidate = raw as Partial<Record<keyof OutputSnapshot, unknown>>;
+    const id = typeof candidate.id === 'string' && candidate.id.trim() ? candidate.id : undefined;
+    const name = typeof candidate.name === 'string' && candidate.name.trim() ? candidate.name : undefined;
+
+    if (!id || !name) {
+      continue;
+    }
+
+    outputs.push({
+      id,
+      name,
+      type: typeof candidate.type === 'string' && candidate.type.trim() ? candidate.type : undefined,
+      selected: candidate.selected === true,
+      volume: typeof candidate.volume === 'number' && Number.isFinite(candidate.volume) ? candidate.volume : 0,
+    });
+  }
+
+  return outputs;
 }
 
 function describeError(error: unknown): string {

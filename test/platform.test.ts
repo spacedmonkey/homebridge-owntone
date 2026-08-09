@@ -59,6 +59,7 @@ describe('resolveServerConfigs', () => {
       bearerToken: undefined,
       ignoreCertificateErrors: false,
       exposeTrackSwitches: false,
+      outputs: [],
     });
   });
 
@@ -151,6 +152,66 @@ describe('resolveServerConfigs', () => {
     );
 
     expect(servers.map((server) => server.name)).toEqual(['Living Room Music', 'Office Music']);
+  });
+
+  it('carries over a valid cached outputs array', () => {
+    const [server] = resolveServerConfigs(
+      {
+        servers: [
+          {
+            name: 'Living Room Music',
+            host: '192.168.1.50',
+            outputs: [
+              { id: '123', name: 'Kitchen', type: 'AirPlay', selected: true, volume: 50 },
+              { id: '456', name: 'Study', selected: false, volume: 0 },
+            ],
+          },
+        ],
+      } as OwnTonePlatformConfig,
+      log,
+    );
+
+    expect(server.outputs).toEqual([
+      { id: '123', name: 'Kitchen', type: 'AirPlay', selected: true, volume: 50 },
+      { id: '456', name: 'Study', type: undefined, selected: false, volume: 0 },
+    ]);
+  });
+
+  it('drops malformed cached output entries instead of throwing', () => {
+    const [server] = resolveServerConfigs(
+      {
+        servers: [
+          {
+            name: 'Living Room Music',
+            host: '192.168.1.50',
+            outputs: [
+              { id: '123', name: 'Kitchen', selected: true, volume: 50 },
+              { name: 'Missing id' },
+              { id: '789' },
+              'not an object',
+              null,
+            ] as unknown as OwnTonePlatformConfig['servers'],
+          },
+        ],
+      } as unknown as OwnTonePlatformConfig,
+      log,
+    );
+
+    expect(server.outputs).toEqual([{ id: '123', name: 'Kitchen', type: undefined, selected: true, volume: 50 }]);
+  });
+
+  it('defaults outputs to an empty array when absent or not an array', () => {
+    const servers = resolveServerConfigs(
+      {
+        servers: [
+          { name: 'A', host: 'a' },
+          { name: 'B', host: 'b', outputs: 'nope' as unknown as OwnTonePlatformConfig['servers'] },
+        ],
+      } as unknown as OwnTonePlatformConfig,
+      log,
+    );
+
+    expect(servers.map((server) => server.outputs)).toEqual([[], []]);
   });
 });
 

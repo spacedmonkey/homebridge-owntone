@@ -21,6 +21,8 @@ export interface OwnToneServerConfig {
   bearerToken?: string;
   ignoreCertificateErrors?: boolean;
   exposeTrackSwitches?: boolean;
+  /** Outputs cached by the "Refresh Outputs" button in the custom UI. */
+  outputs?: OutputSnapshot[];
 }
 
 /** The platform block of the Homebridge config. */
@@ -46,6 +48,8 @@ export interface ResolvedServerConfig {
   bearerToken?: string;
   ignoreCertificateErrors: boolean;
   exposeTrackSwitches: boolean;
+  /** Outputs cached by the "Refresh Outputs" button in the custom UI, validated and defaulted to `[]`. */
+  outputs: OutputSnapshot[];
 }
 
 /* ------------------------------------------------------------------------ *

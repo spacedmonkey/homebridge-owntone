@@ -191,23 +191,22 @@
     // Writes the freshly-fetched outputs into this server's config entry and
     // saves immediately — the whole point of the button is that the config
     // file ends up with current data, not just the in-memory form model.
+    // Errors intentionally propagate to the caller (rather than being
+    // swallowed here) so a failed save shows up as a failed button click
+    // instead of a misleading "success" toast.
     async function saveOutputsForServer(index, outputs) {
-      try {
-        const blocks = await homebridge.getPluginConfig();
-        const block = blocks[0];
-        if (!block || !Array.isArray(block.servers) || !block.servers[index]) {
-          return;
-        }
-
-        block.servers[index] = { ...block.servers[index], outputs };
-        servers = block.servers;
-        renderedSignature = JSON.stringify(servers);
-
-        await homebridge.updatePluginConfig(blocks);
-        await homebridge.savePluginConfig();
-      } catch (error) {
-        console.error('OwnTone custom UI failed to save refreshed outputs', error);
+      const blocks = await homebridge.getPluginConfig();
+      const block = blocks[0];
+      if (!block || !Array.isArray(block.servers) || !block.servers[index]) {
+        throw new Error(`Fetched outputs, but server ${index + 1} is no longer in the config — not saved.`);
       }
+
+      block.servers[index] = { ...block.servers[index], outputs };
+      servers = block.servers;
+      renderedSignature = JSON.stringify(servers);
+
+      await homebridge.updatePluginConfig(blocks);
+      await homebridge.savePluginConfig();
     }
 
     // Renders rows in exactly the order `servers` lists them, which is the

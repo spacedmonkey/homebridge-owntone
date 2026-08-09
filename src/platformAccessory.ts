@@ -90,6 +90,15 @@ export class OwnTonePlatformAccessory {
     this.configureDefaultInputSource();
     this.configureRefreshOutputsSwitch();
 
+    // Seed InputSources from the config's cached outputs (populated by the
+    // custom UI's "Refresh Outputs" button) so they're available immediately
+    // on startup, rather than waiting for the first live poll. The first
+    // poll still runs its own live discovery below and will correct this if
+    // the cache is stale.
+    if (this.config.outputs.length > 0) {
+      this.syncInputSources(this.config.outputs);
+    }
+
     if (this.config.exposeTrackSwitches) {
       this.configureTrackSwitches();
     }
