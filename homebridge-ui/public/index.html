@@ -356,6 +356,32 @@
       render();
     }
 
+    // `outputs` isn't in the schema form's layout (it's not user-edited), so
+    // the form never initializes it on a freshly-added server — the schema
+    // form only applies defaults to fields it actually renders. Backfill it
+    // to `[]` for whatever's already saved when the panel loads. This
+    // deliberately only runs once, at load, rather than on every poll tick:
+    // a server can sit incomplete (mid-edit, no host/name yet) in the staged
+    // config for a while before the user hits Homebridge's own Save button,
+    // and a background timer must not force-save that partial state.
+    function backfillOutputs(blocks) {
+      const block = Array.isArray(blocks) ? blocks[0] : undefined;
+      if (!block || !Array.isArray(block.servers)) {
+        return false;
+      }
+
+      let changed = false;
+      block.servers = block.servers.map((server) => {
+        if (server && Array.isArray(server.outputs)) {
+          return server;
+        }
+        changed = true;
+        return { ...server, outputs: [] };
+      });
+
+      return changed;
+    }
+
     // The schema form's `configChanged` push event should fire on every
     // edit, including adding/removing servers, but it's debounced and can
     // be skipped by Homebridge UI's own refresh cycle — so it's treated as
@@ -390,6 +416,9 @@
       if (!Array.isArray(blocks) || blocks.length === 0) {
         blocks = [{ platform: 'OwnTone', name: 'OwnTone', servers: [] }];
         await homebridge.updatePluginConfig(blocks);
+      } else if (backfillOutputs(blocks)) {
+        await homebridge.updatePluginConfig(blocks);
+        await homebridge.savePluginConfig();
       }
 
       applyServers(serversFromBlocks(blocks));
