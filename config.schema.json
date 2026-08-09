@@ -57,6 +57,15 @@
               "minimum": 1,
               "maximum": 65535
             },
+            "timeout": {
+              "title": "Request Timeout (milliseconds)",
+              "description": "Requests taking longer than this are aborted.",
+              "type": "integer",
+              "default": 5000,
+              "required": false,
+              "minimum": 500,
+              "maximum": 120000
+            },
             "pollingInterval": {
               "title": "Polling Interval (seconds)",
               "description": "How often playback state and now-playing metadata are refreshed.",
@@ -66,14 +75,19 @@
               "minimum": 1,
               "maximum": 3600
             },
-            "timeout": {
-              "title": "Request Timeout (milliseconds)",
-              "description": "Requests taking longer than this are aborted.",
-              "type": "integer",
-              "default": 5000,
-              "required": false,
-              "minimum": 500,
-              "maximum": 120000
+            "exposeTrackSwitches": {
+              "title": "Expose Next/Previous/Play-Pause Switches",
+              "description": "Adds stateless switches for next track, previous track and play/pause. Useful for automations and when the Apple Remote mapping is not enough.",
+              "type": "boolean",
+              "default": false,
+              "required": false
+            },
+            "ignoreCertificateErrors": {
+              "title": "Ignore HTTPS Certificate Errors",
+              "description": "Only applies to HTTPS. Enable when the server uses a self-signed certificate.",
+              "type": "boolean",
+              "default": false,
+              "required": false
             },
             "username": {
               "title": "Username",
@@ -98,20 +112,6 @@
               "x-schema-form": {
                 "type": "password"
               }
-            },
-            "ignoreCertificateErrors": {
-              "title": "Ignore HTTPS Certificate Errors",
-              "description": "Only applies to HTTPS. Enable when the server uses a self-signed certificate.",
-              "type": "boolean",
-              "default": false,
-              "required": false
-            },
-            "exposeTrackSwitches": {
-              "title": "Expose Next/Previous/Play-Pause Switches",
-              "description": "Adds stateless switches for next track, previous track and play/pause. Useful for automations and when the Apple Remote mapping is not enough.",
-              "type": "boolean",
-              "default": false,
-              "required": false
             }
           }
         }
@@ -131,23 +131,23 @@
           "buttonText": "Add OwnTone Server",
           "items": [
             "servers[].name",
-            "servers[].host",
             {
               "type": "flex",
               "flex-flow": "row wrap",
               "items": [
                 "servers[].protocol",
-                { "key": "servers[].port", "type": "number" }
+                "servers[].host"
               ]
             },
             {
               "type": "flex",
               "flex-flow": "row wrap",
               "items": [
-                { "key": "servers[].pollingInterval", "type": "number" },
+                { "key": "servers[].port", "type": "number" },
                 { "key": "servers[].timeout", "type": "number" }
               ]
             },
+            { "key": "servers[].pollingInterval", "type": "number" },
             "servers[].exposeTrackSwitches",
             "servers[].ignoreCertificateErrors",
             {

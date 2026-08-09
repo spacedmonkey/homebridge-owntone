@@ -7,10 +7,10 @@
    * off the `dark-mode` class Homebridge adds to <body> instead.
    */
   .owntone-panel {
-    border: 1px solid rgba(127, 127, 127, 0.35);
-    border-radius: 0.5rem;
-    padding: 1rem 1.25rem;
-    margin-bottom: 1rem;
+    border: 1px solid rgba(127, 127, 127, 0.3);
+    border-radius: 0.75rem;
+    padding: 1.25rem;
+    margin-bottom: 1.25rem;
   }
   body:not(.dark-mode) .owntone-panel {
     background: #ffffff;
@@ -20,36 +20,131 @@
     background: #2c2c2c;
     color: #ffffff;
   }
-  .owntone-panel .owntone-subtle {
-    opacity: 0.7;
-    font-size: 0.875em;
+
+  .owntone-panel .owntone-header {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-bottom: 0.25rem;
   }
+  .owntone-panel .owntone-header h5 {
+    margin: 0;
+    font-weight: 600;
+  }
+  .owntone-panel .owntone-subtle {
+    opacity: 0.65;
+    font-size: 0.85em;
+    line-height: 1.4;
+  }
+  .owntone-panel .owntone-desc {
+    margin: 0.15rem 0 1rem;
+  }
+
+  .owntone-panel .owntone-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
   .owntone-panel .owntone-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 1rem;
-    padding: 0.5rem 0;
+    padding: 0.65rem 0.85rem;
+    border-radius: 0.5rem;
+    border: 1px solid rgba(127, 127, 127, 0.2);
+    transition: border-color 0.15s ease, background-color 0.15s ease;
   }
-  .owntone-panel .owntone-row + .owntone-row {
-    border-top: 1px solid rgba(127, 127, 127, 0.25);
+  body:not(.dark-mode) .owntone-panel .owntone-row {
+    background: rgba(0, 0, 0, 0.015);
   }
-  .owntone-panel .owntone-status {
-    font-size: 0.875em;
-    margin-top: 0.25rem;
+  body.dark-mode .owntone-panel .owntone-row {
+    background: rgba(255, 255, 255, 0.03);
   }
-  .owntone-status.owntone-status-ok { color: #4caf50; }
-  .owntone-status.owntone-status-error { color: #ef5350; }
-  .owntone-status.owntone-status-pending { opacity: 0.7; }
+  .owntone-panel .owntone-row:hover {
+    border-color: rgba(127, 127, 127, 0.4);
+  }
+
+  .owntone-panel .owntone-info {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    min-width: 0;
+  }
+  .owntone-panel .owntone-dot {
+    flex: none;
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 50%;
+    background: rgba(127, 127, 127, 0.4);
+    transition: background-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  .owntone-panel .owntone-dot.owntone-dot-ok {
+    background: #4caf50;
+    box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.18);
+  }
+  .owntone-panel .owntone-dot.owntone-dot-error {
+    background: #ef5350;
+    box-shadow: 0 0 0 3px rgba(239, 83, 80, 0.18);
+  }
+  .owntone-panel .owntone-dot.owntone-dot-pending {
+    background: #f0ad4e;
+    animation: owntone-pulse 1s ease-in-out infinite;
+  }
+  @keyframes owntone-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+
+  .owntone-panel .owntone-text {
+    min-width: 0;
+  }
+  .owntone-panel .owntone-name {
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .owntone-panel .owntone-address {
+    font-size: 0.85em;
+    opacity: 0.65;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .owntone-panel .owntone-controls {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+  }
+  .owntone-panel .owntone-status-text {
+    font-size: 0.85em;
+    white-space: nowrap;
+  }
+  .owntone-status-text.owntone-status-ok { color: #4caf50; }
+  .owntone-status-text.owntone-status-error { color: #ef5350; }
+  .owntone-status-text.owntone-status-pending { opacity: 0.65; }
+
+  .owntone-panel .owntone-empty {
+    opacity: 0.6;
+    font-size: 0.9em;
+    padding: 0.5rem 0.1rem;
+  }
 </style>
 
 <div id="ownTonePanel" class="owntone-panel" style="display: none;">
-  <h5 style="margin: 0 0 0.25rem;">Connection Test</h5>
-  <p class="owntone-subtle" style="margin-bottom: 0.75rem;">
+  <div class="owntone-header">
+    <span aria-hidden="true">🎵</span>
+    <h5>Connection Test</h5>
+  </div>
+  <p class="owntone-subtle owntone-desc">
     Checks that Homebridge can reach each server's OwnTone JSON API (<code>GET /api/config</code>) and
     that it answers with HTTP 200. The request is made by Homebridge itself, not your browser.
   </p>
-  <div id="ownToneTestRows"></div>
+  <div id="ownToneTestRows" class="owntone-list"></div>
 </div>
 
 <script>
@@ -98,13 +193,26 @@
         row.className = 'owntone-row';
 
         const info = document.createElement('div');
-        info.innerHTML = `
-          <div>${label}</div>
-          <div class="owntone-subtle">${server.host ? `${protocol}://${server.host}:${port}` : 'No host set'}</div>
+        info.className = 'owntone-info';
+
+        const dot = document.createElement('span');
+        dot.className = 'owntone-dot';
+
+        const text = document.createElement('div');
+        text.className = 'owntone-text';
+        text.innerHTML = `
+          <div class="owntone-name">${label}</div>
+          <div class="owntone-address">${server.host ? `${protocol}://${server.host}:${port}` : 'No host set'}</div>
         `;
 
+        info.appendChild(dot);
+        info.appendChild(text);
+
         const controls = document.createElement('div');
-        controls.style.textAlign = 'right';
+        controls.className = 'owntone-controls';
+
+        const status = document.createElement('span');
+        status.className = 'owntone-status-text';
 
         const button = document.createElement('button');
         button.type = 'button';
@@ -112,15 +220,13 @@
         button.textContent = 'Test Connection';
         button.disabled = !testable;
 
-        const status = document.createElement('div');
-        status.className = 'owntone-status';
-
         button.addEventListener('click', async () => {
           testingCount += 1;
           button.disabled = true;
           const originalText = button.textContent;
           button.textContent = 'Testing…';
-          status.className = 'owntone-status owntone-status-pending';
+          dot.className = 'owntone-dot owntone-dot-pending';
+          status.className = 'owntone-status-text owntone-status-pending';
           status.textContent = 'Contacting server…';
 
           try {
@@ -136,18 +242,21 @@
             });
 
             if (result.ok) {
-              status.className = 'owntone-status owntone-status-ok';
-              status.textContent = `✓ ${result.message}`;
+              dot.className = 'owntone-dot owntone-dot-ok';
+              status.className = 'owntone-status-text owntone-status-ok';
+              status.textContent = result.message;
               homebridge.toast.success(result.message, label);
             } else {
-              status.className = 'owntone-status owntone-status-error';
-              status.textContent = `✗ ${result.message}`;
+              dot.className = 'owntone-dot owntone-dot-error';
+              status.className = 'owntone-status-text owntone-status-error';
+              status.textContent = result.message;
               homebridge.toast.error(result.message, label);
             }
           } catch (error) {
             const message = (error && error.message) || 'Connection test failed.';
-            status.className = 'owntone-status owntone-status-error';
-            status.textContent = `✗ ${message}`;
+            dot.className = 'owntone-dot owntone-dot-error';
+            status.className = 'owntone-status-text owntone-status-error';
+            status.textContent = message;
             homebridge.toast.error(message, label);
           } finally {
             testingCount = Math.max(0, testingCount - 1);
@@ -156,8 +265,8 @@
           }
         });
 
-        controls.appendChild(button);
         controls.appendChild(status);
+        controls.appendChild(button);
 
         row.appendChild(info);
         row.appendChild(controls);
