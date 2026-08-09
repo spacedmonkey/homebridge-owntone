@@ -141,8 +141,11 @@
     <h5>Connection Test</h5>
   </div>
   <p class="owntone-subtle owntone-desc">
-    Checks that Homebridge can reach each server's OwnTone JSON API (<code>GET /api/config</code>) and
-    that it answers with HTTP 200. The request is made by Homebridge itself, not your browser.
+    <strong>Test Connection</strong> checks that Homebridge can reach each server's OwnTone JSON API
+    (<code>GET /api/config</code>) and that it answers with HTTP 200.
+    <strong>Refresh Outputs</strong> fetches the current AirPlay/Chromecast outputs from the server
+    (<code>GET /api/outputs</code>) and saves them to this server's config entry. Both requests are made
+    by Homebridge itself, not your browser.
   </p>
   <div id="ownToneTestRows" class="owntone-list"></div>
 </div>
@@ -170,6 +173,41 @@
 
     function serversFromBlocks(blocks) {
       return Array.isArray(blocks) && Array.isArray(blocks[0] && blocks[0].servers) ? blocks[0].servers : [];
+    }
+
+    function requestPayload(server, protocol) {
+      return {
+        protocol,
+        host: server.host,
+        port: Number(server.port) || 3689,
+        timeout: Number(server.timeout) || 5000,
+        username: server.username,
+        password: server.password,
+        bearerToken: server.bearerToken,
+        ignoreCertificateErrors: !!server.ignoreCertificateErrors,
+      };
+    }
+
+    // Writes the freshly-fetched outputs into this server's config entry and
+    // saves immediately — the whole point of the button is that the config
+    // file ends up with current data, not just the in-memory form model.
+    async function saveOutputsForServer(index, outputs) {
+      try {
+        const blocks = await homebridge.getPluginConfig();
+        const block = blocks[0];
+        if (!block || !Array.isArray(block.servers) || !block.servers[index]) {
+          return;
+        }
+
+        block.servers[index] = { ...block.servers[index], outputs };
+        servers = block.servers;
+        renderedSignature = JSON.stringify(servers);
+
+        await homebridge.updatePluginConfig(blocks);
+        await homebridge.savePluginConfig();
+      } catch (error) {
+        console.error('OwnTone custom UI failed to save refreshed outputs', error);
+      }
     }
 
     // Renders rows in exactly the order `servers` lists them, which is the
@@ -214,32 +252,23 @@
         const status = document.createElement('span');
         status.className = 'owntone-status-text';
 
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'btn btn-sm btn-outline-primary';
-        button.textContent = 'Test Connection';
-        button.disabled = !testable;
+        const testButton = document.createElement('button');
+        testButton.type = 'button';
+        testButton.className = 'btn btn-sm btn-outline-primary';
+        testButton.textContent = 'Test Connection';
+        testButton.disabled = !testable;
 
-        button.addEventListener('click', async () => {
+        testButton.addEventListener('click', async () => {
           testingCount += 1;
-          button.disabled = true;
-          const originalText = button.textContent;
-          button.textContent = 'Testing…';
+          testButton.disabled = true;
+          const originalText = testButton.textContent;
+          testButton.textContent = 'Testing…';
           dot.className = 'owntone-dot owntone-dot-pending';
           status.className = 'owntone-status-text owntone-status-pending';
           status.textContent = 'Contacting server…';
 
           try {
-            const result = await homebridge.request('/testConnection', {
-              protocol,
-              host: server.host,
-              port: Number(server.port) || 3689,
-              timeout: Number(server.timeout) || 5000,
-              username: server.username,
-              password: server.password,
-              bearerToken: server.bearerToken,
-              ignoreCertificateErrors: !!server.ignoreCertificateErrors,
-            });
+            const result = await homebridge.request('/testConnection', requestPayload(server, protocol));
 
             if (result.ok) {
               dot.className = 'owntone-dot owntone-dot-ok';
@@ -260,13 +289,57 @@
             homebridge.toast.error(message, label);
           } finally {
             testingCount = Math.max(0, testingCount - 1);
-            button.disabled = !isTestable(server);
-            button.textContent = originalText;
+            testButton.disabled = !isTestable(server);
+            testButton.textContent = originalText;
+          }
+        });
+
+        const refreshButton = document.createElement('button');
+        refreshButton.type = 'button';
+        refreshButton.className = 'btn btn-sm btn-outline-secondary';
+        refreshButton.textContent = 'Refresh Outputs';
+        refreshButton.disabled = !testable;
+
+        refreshButton.addEventListener('click', async () => {
+          testingCount += 1;
+          refreshButton.disabled = true;
+          const originalText = refreshButton.textContent;
+          refreshButton.textContent = 'Refreshing…';
+          dot.className = 'owntone-dot owntone-dot-pending';
+          status.className = 'owntone-status-text owntone-status-pending';
+          status.textContent = 'Fetching outputs…';
+
+          try {
+            const result = await homebridge.request('/getOutputs', requestPayload(server, protocol));
+
+            if (result.ok) {
+              await saveOutputsForServer(index, result.outputs || []);
+              dot.className = 'owntone-dot owntone-dot-ok';
+              status.className = 'owntone-status-text owntone-status-ok';
+              status.textContent = result.message;
+              homebridge.toast.success(result.message, label);
+            } else {
+              dot.className = 'owntone-dot owntone-dot-error';
+              status.className = 'owntone-status-text owntone-status-error';
+              status.textContent = result.message;
+              homebridge.toast.error(result.message, label);
+            }
+          } catch (error) {
+            const message = (error && error.message) || 'Failed to fetch outputs.';
+            dot.className = 'owntone-dot owntone-dot-error';
+            status.className = 'owntone-status-text owntone-status-error';
+            status.textContent = message;
+            homebridge.toast.error(message, label);
+          } finally {
+            testingCount = Math.max(0, testingCount - 1);
+            refreshButton.disabled = !isTestable(server);
+            refreshButton.textContent = originalText;
           }
         });
 
         controls.appendChild(status);
-        controls.appendChild(button);
+        controls.appendChild(refreshButton);
+        controls.appendChild(testButton);
 
         row.appendChild(info);
         row.appendChild(controls);

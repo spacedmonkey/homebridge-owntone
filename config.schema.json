@@ -117,6 +117,23 @@
               "x-schema-form": {
                 "type": "password"
               }
+            },
+            "outputs": {
+              "title": "Known Outputs",
+              "description": "Cached AirPlay/Chromecast outputs last seen on this server. Populated by the \"Refresh Outputs\" button above; not user-edited.",
+              "type": "array",
+              "default": [],
+              "required": false,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string" },
+                  "name": { "type": "string" },
+                  "type": { "type": "string" },
+                  "selected": { "type": "boolean" },
+                  "volume": { "type": "number" }
+                }
+              }
             }
           }
         }

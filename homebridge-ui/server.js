@@ -11,6 +11,7 @@ class OwnTonePluginUiServer extends HomebridgePluginUiServer {
   constructor() {
     super();
     this.onRequest('/testConnection', this.testConnection.bind(this));
+    this.onRequest('/getOutputs', this.getOutputs.bind(this));
     this.ready();
   }
 
@@ -20,6 +21,49 @@ class OwnTonePluginUiServer extends HomebridgePluginUiServer {
    * can reach LAN hosts regardless of CORS/mixed-content restrictions.
    */
   async testConnection(payload = {}) {
+    const result = await this.fetchJson(payload, '/api/config');
+    if (!result.ok) {
+      return result;
+    }
+
+    const body = result.body;
+    return { ok: true, message: body && body.version ? `Connected — OwnTone ${body.version}` : 'Connected.' };
+  }
+
+  /**
+   * Hits `GET /api/outputs` and normalises the response to the same shape
+   * the plugin stores under `servers[].outputs`, so the custom UI can save
+   * the result straight into the config without any further mapping.
+   */
+  async getOutputs(payload = {}) {
+    const result = await this.fetchJson(payload, '/api/outputs');
+    if (!result.ok) {
+      return result;
+    }
+
+    const raw = Array.isArray(result.body && result.body.outputs) ? result.body.outputs : [];
+    const outputs = raw
+      .filter((output) => output && output.id !== undefined && output.id !== null)
+      .map((output) => ({
+        id: String(output.id),
+        name: typeof output.name === 'string' && output.name.trim() ? output.name.trim() : `Output ${output.id}`,
+        type: typeof output.type === 'string' && output.type.trim() ? output.type.trim() : undefined,
+        selected: output.selected === true,
+        volume: Number.isFinite(output.volume) ? output.volume : 0,
+      }));
+
+    return {
+      ok: true,
+      message: `Found ${outputs.length} output${outputs.length === 1 ? '' : 's'}.`,
+      outputs,
+    };
+  }
+
+  /**
+   * Shared `GET <protocol>://<host>:<port><pathname>` request used by both
+   * endpoints above — same auth, timeout and self-signed-cert handling.
+   */
+  async fetchJson(payload, pathname) {
     const host = typeof payload.host === 'string' ? payload.host.trim() : '';
     if (!host) {
       return { ok: false, message: 'Host is required.' };
@@ -28,7 +72,7 @@ class OwnTonePluginUiServer extends HomebridgePluginUiServer {
     const protocol = payload.protocol === 'https' ? 'https' : 'http';
     const port = Number.isInteger(payload.port) ? payload.port : DEFAULT_PORT;
     const timeout = Number.isInteger(payload.timeout) ? payload.timeout : DEFAULT_TIMEOUT;
-    const url = `${protocol}://${host}:${port}/api/config`;
+    const url = `${protocol}://${host}:${port}${pathname}`;
 
     const headers = { Accept: 'application/json' };
     if (payload.bearerToken) {
@@ -61,9 +105,9 @@ class OwnTonePluginUiServer extends HomebridgePluginUiServer {
 
     try {
       const body = await response.json();
-      return { ok: true, message: body && body.version ? `Connected — OwnTone ${body.version}` : 'Connected.' };
+      return { ok: true, body };
     } catch {
-      return { ok: true, message: 'Connected.' };
+      return { ok: true, body: undefined };
     }
   }
 }
