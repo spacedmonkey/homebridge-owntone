@@ -141,33 +141,21 @@
               ]
             },
             {
-              "type": "fieldset",
-              "title": "Advanced",
+              "type": "flex",
+              "flex-flow": "row wrap",
               "items": [
-                {
-                  "type": "flex",
-                  "flex-flow": "row wrap",
-                  "items": [
-                    { "key": "servers[].pollingInterval", "type": "number" },
-                    { "key": "servers[].timeout", "type": "number" }
-                  ]
-                },
-                "servers[].exposeTrackSwitches",
-                "servers[].ignoreCertificateErrors"
+                { "key": "servers[].pollingInterval", "type": "number" },
+                { "key": "servers[].timeout", "type": "number" }
               ]
             },
+            "servers[].exposeTrackSwitches",
+            "servers[].ignoreCertificateErrors",
             {
-              "type": "fieldset",
-              "title": "Authentication (optional)",
-              "items": [
-                {
-                  "type": "flex",
-                  "flex-flow": "row wrap",
-                  "items": ["servers[].username", "servers[].password"]
-                },
-                "servers[].bearerToken"
-              ]
-            }
+              "type": "flex",
+              "flex-flow": "row wrap",
+              "items": ["servers[].username", "servers[].password"]
+            },
+            "servers[].bearerToken"
           ]
         }
       ]
