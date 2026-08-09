@@ -69,6 +69,7 @@ interface InputSourceEntry {
 export class OwnTonePlatformAccessory {
   private readonly televisionService: Service;
   private readonly speakerService: Service;
+  private playPauseSwitchService?: Service;
   private readonly inputs: InputSourceEntry[] = [];
   private readonly switchTimers = new Set<NodeJS.Timeout>();
   private readonly throttle = new ErrorThrottle();
@@ -303,7 +304,34 @@ export class OwnTonePlatformAccessory {
   private configureTrackSwitches(): void {
     this.addTrackSwitch('owntone-next', 'Next Track', () => this.client.next());
     this.addTrackSwitch('owntone-previous', 'Previous Track', () => this.client.previous());
-    this.addTrackSwitch('owntone-playpause', 'Play/Pause', () => this.client.toggle());
+    this.configurePlayPauseSwitch();
+  }
+
+  /**
+   * Unlike the momentary Next/Previous switches, Play/Pause reflects actual
+   * playback state — on while OwnTone is playing, off while paused or
+   * stopped — and setting it drives playback directly (`play()`/`pause()`,
+   * the same commands the Television's `Active` characteristic uses), same
+   * behaviour as `handleActiveSet` below.
+   */
+  private configurePlayPauseSwitch(): void {
+    const { Service, Characteristic } = this.platform;
+    const displayName = `${this.config.name} Play/Pause`;
+    const service =
+      this.accessory.getServiceById(Service.Switch, 'owntone-playpause') ??
+      this.accessory.addService(Service.Switch, displayName, 'owntone-playpause');
+
+    this.setIfSupported(service, 'ConfiguredName', displayName);
+    this.playPauseSwitchService = service;
+
+    service
+      .getCharacteristic(Characteristic.On)
+      .onGet(() => this.isPlaying)
+      .onSet(async (value) => {
+        const shouldPlay = value === true;
+        await this.runCommand(shouldPlay ? 'play' : 'pause', () => (shouldPlay ? this.client.play() : this.client.pause()), true);
+        void this.poll();
+      });
   }
 
   private addTrackSwitch(subtype: string, name: string, action: () => Promise<void>): void {
@@ -338,9 +366,13 @@ export class OwnTonePlatformAccessory {
    * HomeKit handlers
    * -------------------------------------------------------------------- */
 
+  private get isPlaying(): boolean {
+    return this.reachable && this.player?.state === 'play';
+  }
+
   private currentActiveState(): CharacteristicValue {
     const { Characteristic } = this.platform;
-    return this.reachable && this.player?.state === 'play' ? Characteristic.Active.ACTIVE : Characteristic.Active.INACTIVE;
+    return this.isPlaying ? Characteristic.Active.ACTIVE : Characteristic.Active.INACTIVE;
   }
 
   private currentMuteState(): CharacteristicValue {
@@ -601,6 +633,10 @@ export class OwnTonePlatformAccessory {
     this.updateIfChanged(this.televisionService, Characteristic.Active, this.currentActiveState());
     this.updateIfChanged(this.televisionService, Characteristic.ActiveIdentifier, this.activeIdentifier);
     this.updateIfChanged(this.speakerService, Characteristic.Mute, this.currentMuteState());
+
+    if (this.playPauseSwitchService) {
+      this.updateIfChanged(this.playPauseSwitchService, Characteristic.On, this.isPlaying);
+    }
 
     const volumeCharacteristic = this.optionalCharacteristic('Volume');
     if (volumeCharacteristic) {

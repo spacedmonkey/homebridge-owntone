@@ -590,6 +590,93 @@ describe('OwnTonePlatformAccessory — track switches', () => {
   });
 });
 
+describe('OwnTonePlatformAccessory — play/pause switch', () => {
+  it('is on while OwnTone is playing', async () => {
+    const { accessory, handler } = await build({ exposeTrackSwitches: true });
+    const playPauseSwitch = accessory.getServiceById(HapService.Switch, 'owntone-playpause') as Service;
+
+    expect(playPauseSwitch.getCharacteristic(Characteristic.On).value).toBe(true);
+    handler.dispose();
+  });
+
+  it('is off while paused', async () => {
+    const client = createFakeClient();
+    client.getStatus.mockResolvedValue(playing({ state: 'pause' }));
+
+    const { accessory, handler } = await build({ exposeTrackSwitches: true }, client);
+    const playPauseSwitch = accessory.getServiceById(HapService.Switch, 'owntone-playpause') as Service;
+
+    expect(playPauseSwitch.getCharacteristic(Characteristic.On).value).toBe(false);
+    handler.dispose();
+  });
+
+  it('is off while stopped', async () => {
+    const client = createFakeClient();
+    client.getStatus.mockResolvedValue(playing({ state: 'stop' }));
+
+    const { accessory, handler } = await build({ exposeTrackSwitches: true }, client);
+    const playPauseSwitch = accessory.getServiceById(HapService.Switch, 'owntone-playpause') as Service;
+
+    expect(playPauseSwitch.getCharacteristic(Characteristic.On).value).toBe(false);
+    handler.dispose();
+  });
+
+  it('follows playback state across later polls, unlike the momentary switches it does not reset itself', async () => {
+    const client = createFakeClient();
+    const { accessory, handler } = await build({ exposeTrackSwitches: true }, client);
+    const playPauseSwitch = accessory.getServiceById(HapService.Switch, 'owntone-playpause') as Service;
+
+    expect(playPauseSwitch.getCharacteristic(Characteristic.On).value).toBe(true);
+
+    client.getStatus.mockResolvedValue(playing({ state: 'pause' }));
+    await jest.advanceTimersByTimeAsync(POLL_MS);
+    expect(playPauseSwitch.getCharacteristic(Characteristic.On).value).toBe(false);
+
+    // Next/Previous auto-reset after SWITCH_RESET_DELAY (500ms) — this must not.
+    await jest.advanceTimersByTimeAsync(600);
+    expect(playPauseSwitch.getCharacteristic(Characteristic.On).value).toBe(false);
+
+    handler.dispose();
+  });
+
+  it('calls play() when set to on', async () => {
+    const client = createFakeClient();
+    client.getStatus.mockResolvedValue(playing({ state: 'pause' }));
+
+    const { accessory, handler } = await build({ exposeTrackSwitches: true }, client);
+    const playPauseSwitch = accessory.getServiceById(HapService.Switch, 'owntone-playpause') as Service;
+
+    await playPauseSwitch.getCharacteristic(Characteristic.On).handleSetRequest(true);
+
+    expect(client.play).toHaveBeenCalled();
+    handler.dispose();
+  });
+
+  it('calls pause() when set to off', async () => {
+    const { accessory, client, handler } = await build({ exposeTrackSwitches: true });
+    const playPauseSwitch = accessory.getServiceById(HapService.Switch, 'owntone-playpause') as Service;
+
+    await playPauseSwitch.getCharacteristic(Characteristic.On).handleSetRequest(false);
+
+    expect(client.pause).toHaveBeenCalled();
+    handler.dispose();
+  });
+
+  it('surfaces a HomeKit error when the command fails', async () => {
+    const client = createFakeClient();
+    client.play.mockRejectedValue(new Error('connect ECONNREFUSED'));
+    client.getStatus.mockResolvedValue(playing({ state: 'pause' }));
+
+    const { accessory, log, handler } = await build({ exposeTrackSwitches: true }, client);
+    const playPauseSwitch = accessory.getServiceById(HapService.Switch, 'owntone-playpause') as Service;
+
+    await expect(playPauseSwitch.getCharacteristic(Characteristic.On).handleSetRequest(true)).rejects.toBeDefined();
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('failed'), 'Living Room Music', 'play', 'connect ECONNREFUSED');
+
+    handler.dispose();
+  });
+});
+
 describe('OwnTonePlatformAccessory — polling', () => {
   it('polls immediately and then on the configured interval', async () => {
     const { client, handler } = await build();

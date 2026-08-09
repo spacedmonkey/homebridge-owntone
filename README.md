@@ -195,7 +195,7 @@ These are limitations of HomeKit and the Home app, not of OwnTone or this plugin
 - **`PowerModeSelection` (the "Settings" button) is acknowledged and ignored** — OwnTone has no settings screen to open.
 - **Shuffle, repeat and consume modes are not exposed.** OwnTone supports them, but HomeKit has no matching characteristic. Nothing is invented to work around this.
 
-If the Apple Remote mapping is not enough for your automations, enable `exposeTrackSwitches` to get plain HomeKit switches for next track, previous track and play/pause. They turn themselves back off after 500 ms, so they behave like buttons.
+If the Apple Remote mapping is not enough for your automations, enable `exposeTrackSwitches` to get plain HomeKit switches for next track, previous track and play/pause. Next track and previous track are momentary — they turn themselves back off after 500 ms, so they behave like buttons. Play/Pause is stateful instead: it reflects whether OwnTone is actually playing (on) or paused/stopped (off), updating on every poll, and setting it drives playback directly (`play()`/`pause()`) rather than toggling.
 
 ## Artwork / thumbnail limitation
 
