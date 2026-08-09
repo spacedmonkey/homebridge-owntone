@@ -21,6 +21,25 @@ import type { ArtworkSnapshot, OutputSnapshot, PlayerSnapshot, ResolvedServerCon
 /** Identifier of the always-present "OwnTone" input source. */
 const DEFAULT_INPUT_IDENTIFIER = 1;
 
+/**
+ * HomeKit's `Name`/`ConfiguredName` characteristics only accept letters,
+ * numbers, spaces, apostrophes and a small set of punctuation, and must both
+ * start and end with a letter or number. OwnTone output names (AirPlay,
+ * Chromecast, etc. speakers) routinely contain parentheses, quote marks or
+ * other characters HomeKit rejects, so they're normalized before being used
+ * as an InputSource name.
+ */
+export function sanitizeHapName(name: string): string {
+  const cleaned = name
+    .replace(/[^\p{L}\p{N} '.,-]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^[^\p{L}\p{N}]+/u, '')
+    .replace(/[^\p{L}\p{N}]+$/u, '');
+
+  return cleaned || 'Output';
+}
+
 type CharacteristicCtor = WithUUID<new () => HAPCharacteristic>;
 
 interface InputSourceEntry {
@@ -575,7 +594,7 @@ export class OwnTonePlatformAccessory {
 
     outputs.forEach((output, index) => {
       const identifier = index + 2; // identifier 1 is the generic source
-      const label = output.type ? `${output.name} (${output.type})` : output.name;
+      const label = sanitizeHapName(output.type ? `${output.name} (${output.type})` : output.name);
 
       let entry = this.inputs.find((input) => input.identifier === identifier);
       if (!entry) {

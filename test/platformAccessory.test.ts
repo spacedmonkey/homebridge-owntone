@@ -3,7 +3,7 @@ import type { PlatformAccessory, Service } from 'homebridge';
 import type { OwnToneClient } from '../src/owntoneClient';
 import { UnsupportedFeatureError } from '../src/owntoneClient';
 import type { OwnTonePlatform } from '../src/platform';
-import { OwnTonePlatformAccessory } from '../src/platformAccessory';
+import { OwnTonePlatformAccessory, sanitizeHapName } from '../src/platformAccessory';
 import { serverIdentity } from '../src/platform';
 import { DEFAULT_POLLING_INTERVAL } from '../src/settings';
 import type { OutputSnapshot, PlayerSnapshot, ResolvedServerConfig, TrackSnapshot } from '../src/types';
@@ -166,6 +166,28 @@ afterEach(() => {
   jest.useRealTimers();
 });
 
+describe('sanitizeHapName', () => {
+  it('leaves an already-valid name untouched', () => {
+    expect(sanitizeHapName('Living Room')).toBe('Living Room');
+  });
+
+  it('strips parentheses added around an output type', () => {
+    expect(sanitizeHapName('Kitchen ATV (AirPlay 2)')).toBe('Kitchen ATV AirPlay 2');
+  });
+
+  it('strips characters HomeKit rejects, such as an inch mark', () => {
+    expect(sanitizeHapName('55" The Frame (Chromecast)')).toBe('55 The Frame Chromecast');
+  });
+
+  it('trims leading/trailing punctuation left over after stripping', () => {
+    expect(sanitizeHapName('(dummy)')).toBe('dummy');
+  });
+
+  it('falls back to a placeholder when nothing valid remains', () => {
+    expect(sanitizeHapName('🎵🎶')).toBe('Output');
+  });
+});
+
 describe('OwnTonePlatformAccessory — services', () => {
   it('exposes the accessory information expected by HomeKit', async () => {
     const { accessory, handler } = await build();
@@ -226,8 +248,8 @@ describe('OwnTonePlatformAccessory — services', () => {
     expect(inputs).toHaveLength(3);
     expect(inputs.map((service) => service.getCharacteristic(Characteristic.ConfiguredName).value)).toEqual([
       'OwnTone',
-      'Kitchen (AirPlay)',
-      'Study (AirPlay)',
+      'Kitchen AirPlay',
+      'Study AirPlay',
     ]);
 
     handler.dispose();
