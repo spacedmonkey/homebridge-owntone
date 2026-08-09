@@ -317,41 +317,10 @@ describe('OwnTonePlatformAccessory — services', () => {
     handler.dispose();
   });
 
-  it('always creates the Refresh Outputs switch, regardless of exposeTrackSwitches', async () => {
+  it('does not create a Refresh Outputs switch (outputs refresh automatically every poll)', async () => {
     const { accessory, handler } = await build();
 
-    expect(accessory.getServiceById(HapService.Switch, 'owntone-refresh-outputs')).toBeDefined();
-    handler.dispose();
-  });
-});
-
-describe('OwnTonePlatformAccessory — refresh outputs switch', () => {
-  it('re-fetches outputs and updates input sources on demand', async () => {
-    const { accessory, client, handler } = await build();
-    const refreshSwitch = accessory.getServiceById(HapService.Switch, 'owntone-refresh-outputs') as Service;
-
-    expect(client.getOutputs).toHaveBeenCalledTimes(1);
-
-    client.getOutputs.mockResolvedValueOnce([{ id: '789', name: 'Garage', type: 'AirPlay', selected: false, volume: 0 }]);
-    await refreshSwitch.getCharacteristic(Characteristic.On).handleSetRequest(true);
-
-    expect(client.getOutputs).toHaveBeenCalledTimes(2);
-    expect(accessory.services.filter((service) => service.UUID === HapService.InputSource.UUID)).toHaveLength(2);
-
-    await jest.advanceTimersByTimeAsync(600);
-    expect(refreshSwitch.getCharacteristic(Characteristic.On).value).toBe(false);
-
-    handler.dispose();
-  });
-
-  it('does not reject when the refresh fails', async () => {
-    const client = createFakeClient();
-    const { accessory, handler } = await build({}, client);
-    const refreshSwitch = accessory.getServiceById(HapService.Switch, 'owntone-refresh-outputs') as Service;
-
-    client.getOutputs.mockRejectedValueOnce(new Error('boom'));
-    await expect(refreshSwitch.getCharacteristic(Characteristic.On).handleSetRequest(true)).resolves.toBeUndefined();
-
+    expect(accessory.getServiceById(HapService.Switch, 'owntone-refresh-outputs')).toBeUndefined();
     handler.dispose();
   });
 });
@@ -579,6 +548,31 @@ describe('OwnTonePlatformAccessory — polling', () => {
 
     await jest.advanceTimersByTimeAsync(POLL_MS);
     expect(client.getStatus).toHaveBeenCalledTimes(3);
+
+    handler.dispose();
+  });
+
+  it('logs the track information after every poll completes, not just on change', async () => {
+    const client = createFakeClient();
+    const { log, handler } = await build({}, client);
+
+    expect(log.debug).toHaveBeenCalledWith(
+      '"%s": poll complete — %s',
+      'Living Room Music',
+      expect.stringContaining('now playing "Angels" by "The xx"'),
+    );
+
+    log.debug.mockClear();
+    client.getNowPlaying.mockResolvedValue(track({ title: 'Angels', artist: 'The xx' }));
+    await jest.advanceTimersByTimeAsync(POLL_MS);
+
+    // Same track again — logTrackChange wouldn't log this, but the
+    // poll-complete summary should still fire every cycle.
+    expect(log.debug).toHaveBeenCalledWith(
+      '"%s": poll complete — %s',
+      'Living Room Music',
+      expect.stringContaining('now playing "Angels" by "The xx"'),
+    );
 
     handler.dispose();
   });

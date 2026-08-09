@@ -87,7 +87,6 @@ export class OwnTonePlatformAccessory {
     this.televisionService = this.configureTelevisionService();
     this.speakerService = this.configureSpeakerService();
     this.configureDefaultInputSource();
-    this.configureRefreshOutputsSwitch();
 
     // Seed InputSources from the config's cached outputs (populated by the
     // custom UI's "Refresh Outputs" button) so they're available immediately
@@ -286,21 +285,6 @@ export class OwnTonePlatformAccessory {
     return service;
   }
 
-  /**
-   * Outputs are already refreshed on every poll (see `poll()`); this switch
-   * just forces that refresh to happen immediately instead of waiting for
-   * the next cycle, e.g. right after adding an output on the server.
-   */
-  private configureRefreshOutputsSwitch(): void {
-    this.addTrackSwitch('owntone-refresh-outputs', 'Refresh Outputs', () => this.refreshOutputsNow());
-  }
-
-  private async refreshOutputsNow(): Promise<void> {
-    const outputs = await this.client.getOutputs();
-    this.syncInputSources(outputs);
-    this.pushStateToHomeKit();
-  }
-
   private configureTrackSwitches(): void {
     this.addTrackSwitch('owntone-next', 'Next Track', () => this.client.next());
     this.addTrackSwitch('owntone-previous', 'Previous Track', () => this.client.previous());
@@ -488,6 +472,7 @@ export class OwnTonePlatformAccessory {
     }
 
     this.polling = true;
+    this.platform.log.debug('"%s": polling %s.', this.config.name, this.client.description);
     try {
       const player = await this.client.getStatus();
 
@@ -539,6 +524,8 @@ export class OwnTonePlatformAccessory {
 
     this.pushStateToHomeKit();
     void this.refreshArtwork();
+
+    this.platform.log.debug('"%s": poll complete — %s', this.config.name, this.describeTrack(this.track));
   }
 
   private onPollFailure(error: unknown): void {
@@ -632,19 +619,18 @@ export class OwnTonePlatformAccessory {
       return;
     }
 
+    this.platform.log.debug('"%s": %s', this.config.name, this.describeTrack(track));
+  }
+
+  private describeTrack(track: TrackSnapshot | undefined): string {
     if (!track) {
-      this.platform.log.debug('"%s": nothing playing.', this.config.name);
-      return;
+      return 'nothing playing.';
     }
 
-    this.platform.log.debug(
-      '"%s": now playing "%s" by "%s" from "%s" (%s, %s)',
-      this.config.name,
-      track.title ?? 'unknown title',
-      track.artist ?? 'unknown artist',
-      track.album ?? 'unknown album',
-      this.player?.state ?? 'unknown state',
-      formatDuration(this.player?.progressMs, track.durationMs ?? this.player?.lengthMs),
+    return (
+      `now playing "${track.title ?? 'unknown title'}" by "${track.artist ?? 'unknown artist'}" ` +
+      `from "${track.album ?? 'unknown album'}" (${this.player?.state ?? 'unknown state'}, ` +
+      `${formatDuration(this.player?.progressMs, track.durationMs ?? this.player?.lengthMs)})`
     );
   }
 
