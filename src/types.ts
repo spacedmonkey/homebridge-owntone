@@ -21,6 +21,8 @@ export interface OwnToneServerConfig {
   bearerToken?: string;
   ignoreCertificateErrors?: boolean;
   exposeTrackSwitches?: boolean;
+  /** Whether to use the server's push-notification WebSocket, when it advertises one. Defaults to `true`. */
+  enableWebSocket?: boolean;
   /** Outputs cached by the "Refresh Outputs" button in the custom UI. */
   outputs?: OutputSnapshot[];
 }
@@ -48,6 +50,8 @@ export interface ResolvedServerConfig {
   bearerToken?: string;
   ignoreCertificateErrors: boolean;
   exposeTrackSwitches: boolean;
+  /** Whether to use the server's push-notification WebSocket, when it advertises one. */
+  enableWebSocket: boolean;
   /** Outputs cached by the "Refresh Outputs" button in the custom UI, validated and defaulted to `[]`. */
   outputs: OutputSnapshot[];
 }

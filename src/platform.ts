@@ -226,6 +226,9 @@ export function resolveServerConfigs(
       bearerToken: nonEmpty(entry.bearerToken),
       ignoreCertificateErrors: entry.ignoreCertificateErrors === true,
       exposeTrackSwitches: entry.exposeTrackSwitches === true,
+      // Defaults to enabled — unlike the booleans above, only an explicit
+      // `false` opts out, rather than requiring an explicit `true` to opt in.
+      enableWebSocket: entry.enableWebSocket !== false,
       outputs: resolveOutputs(entry.outputs),
     });
   });

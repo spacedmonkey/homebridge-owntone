@@ -27,7 +27,7 @@ For every OwnTone server you configure, the plugin creates one HomeKit accessory
 | `InputSource` | One per OwnTone output (speaker), plus a generic "OwnTone" source |
 | `Switch` *(optional)* | Next Track / Previous Track / Play-Pause, when `exposeTrackSwitches` is enabled |
 
-It polls each server every 5 seconds by default for playback state, now-playing metadata and (about once a minute) the list of outputs.
+It polls each server every 5 seconds by default for playback state, now-playing metadata and the list of outputs — except while playback is stopped, when the extra now-playing/outputs requests are skipped since there's nothing new to report. If the server was built with [WebSocket push notification support](https://owntone.github.io/owntone-server/json-api/#push-notifications), the plugin also subscribes to it and reacts to changes immediately instead of waiting for the next poll; the polling interval then backs off to an infrequent safety-net check (every 5 minutes) rather than stopping outright, since a WebSocket can stay open while actually dead. Servers without WebSocket support are unaffected — they just keep polling at the configured interval as before.
 
 ---
 
@@ -231,10 +231,10 @@ The plugin is built so that no OwnTone problem can take Homebridge down:
 
 | Level | Used for |
 | --- | --- |
-| `info` | Accessory published, server reachable/recovered, OwnTone version |
+| `info` | Accessory published, server reachable/recovered, OwnTone version, push notifications active, poll-complete track summary (every poll) |
 | `warn` | Server unreachable, command failure, unsupported feature, invalid config |
 | `error` | Unexpected setup failures (still non-fatal) |
-| `debug` | Metadata changes, artwork caching, ignored remote keys, skipped polls |
+| `debug` | Metadata changes, artwork caching, ignored remote keys, skipped polls, push notification connect/reconnect attempts |
 
 Enable debug logging with `homebridge -D` or the **Debug Mode** toggle in the Homebridge UI.
 
@@ -306,6 +306,7 @@ src/
   platform.ts          DynamicPlatformPlugin: config validation, accessory lifecycle
   platformAccessory.ts HomeKit services, characteristic mapping, polling loop
   owntoneClient.ts     Typed OwnTone JSON API client
+  owntonePushClient.ts Optional WebSocket push-notification client (falls back to polling)
   errorThrottle.ts     Log-spam suppression
   types.ts             Config, raw API and normalised internal models
 ```
@@ -324,7 +325,8 @@ Covered areas:
 
 - **Client** — base URL construction for HTTP/HTTPS and custom ports, default port, request timeouts, basic auth and bearer headers, JSON bodies, network/HTTP/404/malformed-JSON error mapping, response normalisation, missing metadata, every playback and volume command, mute emulation, artwork URL resolution.
 - **Platform** — defaults and validation, invalid entries skipped, multiple servers, stable UUIDs, one accessory per server, duplicate detection, stale accessory removal, shutdown cleanup.
-- **Accessory** — service and characteristic setup, state mapping, remote key mapping, volume and mute commands, input/output selection, optional track switches, polling cadence and overlap guard, unavailable-after-3-failures and recovery, warning throttling, artwork caching.
+- **Accessory** — service and characteristic setup, state mapping, remote key mapping, volume and mute commands, input/output selection, optional track switches, polling cadence and overlap guard, unavailable-after-3-failures and recovery, warning throttling, artwork caching, push-notification connection and poll-cadence backoff.
+- **Push client** — subscribe message, reconnect backoff and reset, idempotent dispose, default transport resolution.
 - **Error throttling** — first log, suppression inside the window, re-log with suppressed count afterwards.
 
 ---

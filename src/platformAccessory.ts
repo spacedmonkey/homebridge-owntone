@@ -8,6 +8,8 @@ import type {
 
 import { ErrorThrottle } from './errorThrottle';
 import { OwnToneClient, UnsupportedFeatureError } from './owntoneClient';
+import type { OwnTonePushClientOptions } from './owntonePushClient';
+import { OwnTonePushClient } from './owntonePushClient';
 import type { OwnTonePlatform } from './platform';
 import { serverIdentity } from './platform';
 import {
@@ -15,8 +17,16 @@ import {
   FAILURE_THRESHOLD,
   SEEK_STEP_MS,
   SWITCH_RESET_DELAY,
+  WEBSOCKET_RECONCILE_INTERVAL_MS,
 } from './settings';
-import type { ArtworkSnapshot, OutputSnapshot, PlayerSnapshot, ResolvedServerConfig, TrackSnapshot } from './types';
+import type {
+  ArtworkSnapshot,
+  OutputSnapshot,
+  OwnToneConfigResponse,
+  PlayerSnapshot,
+  ResolvedServerConfig,
+  TrackSnapshot,
+} from './types';
 
 /** Identifier of the always-present "OwnTone" input source. */
 const DEFAULT_INPUT_IDENTIFIER = 1;
@@ -67,6 +77,8 @@ export class OwnTonePlatformAccessory {
   private polling = false;
   private disposed = false;
   private consecutiveFailures = 0;
+  private pushClient?: OwnTonePushClient;
+  private wsConnected = false;
 
   private reachable = false;
   private player?: PlayerSnapshot;
@@ -82,6 +94,8 @@ export class OwnTonePlatformAccessory {
     private readonly accessory: PlatformAccessory,
     private readonly config: ResolvedServerConfig,
     private readonly client: OwnToneClient,
+    private readonly pushClientFactory: (options: OwnTonePushClientOptions) => OwnTonePushClient = (options) =>
+      new OwnTonePushClient(options),
   ) {
     this.configureAccessoryInformation();
     this.televisionService = this.configureTelevisionService();
@@ -116,6 +130,7 @@ export class OwnTonePlatformAccessory {
       clearTimeout(timer);
     }
     this.switchTimers.clear();
+    this.pushClient?.dispose();
   }
 
   /** Latest cached artwork metadata, if any. Exposed for logging and tests. */
@@ -454,8 +469,28 @@ export class OwnTonePlatformAccessory {
    * -------------------------------------------------------------------- */
 
   private startPolling(): void {
-    const intervalMs = this.config.pollingInterval * 1000;
     void this.poll();
+    this.restartPollTimer();
+  }
+
+  /**
+   * (Re)creates the poll timer at whichever cadence currently applies.
+   * While the push-notification WebSocket is connected, that's just an
+   * infrequent reconciliation safety net (`WEBSOCKET_RECONCILE_INTERVAL_MS`)
+   * since state changes arrive via `onEvent` instead; otherwise it's the
+   * configured `pollingInterval`, same as before push support existed.
+   * Called on startup and whenever the WebSocket connects/disconnects.
+   */
+  private restartPollTimer(): void {
+    if (this.disposed) {
+      return;
+    }
+
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+    }
+
+    const intervalMs = this.wsConnected ? WEBSOCKET_RECONCILE_INTERVAL_MS : this.config.pollingInterval * 1000;
     this.pollTimer = setInterval(() => void this.poll(), intervalMs);
     if (typeof this.pollTimer.unref === 'function') {
       this.pollTimer.unref();
@@ -669,22 +704,68 @@ export class OwnTonePlatformAccessory {
     }
   }
 
+  /**
+   * Runs once at startup: records the OwnTone version as the accessory's
+   * firmware revision, and — if the server advertises a websocket port —
+   * connects the push-notification client. Both come from the same
+   * `/api/config` call to avoid a second request.
+   */
   private async loadFirmwareRevision(): Promise<void> {
     try {
       const config = await this.client.getConfig();
+
       const version = typeof config?.version === 'string' && config.version.trim() ? config.version.trim() : undefined;
-      if (!version) {
-        return;
+      if (version) {
+        const information = this.accessory.getService(this.platform.Service.AccessoryInformation);
+        if (information) {
+          this.setIfSupported(information, 'FirmwareRevision', version);
+        }
+        this.platform.log.info('"%s": connected to OwnTone %s at %s', this.config.name, version, this.client.description);
       }
 
-      const information = this.accessory.getService(this.platform.Service.AccessoryInformation);
-      if (information) {
-        this.setIfSupported(information, 'FirmwareRevision', version);
-      }
-      this.platform.log.info('"%s": connected to OwnTone %s at %s', this.config.name, version, this.client.description);
+      this.connectPushClientIfSupported(config);
     } catch (error) {
       this.platform.log.debug('"%s": could not read the OwnTone version: %s', this.config.name, describeError(error));
     }
+  }
+
+  /**
+   * Connects the push-notification WebSocket when the server advertises
+   * support for it (`websocket_port` in `/api/config`). Servers without
+   * websocket support simply have no `websocket_port`, so this is a no-op
+   * for them — behaviour stays exactly as it was before push support
+   * existed, i.e. polling at `config.pollingInterval`.
+   */
+  private connectPushClientIfSupported(config: OwnToneConfigResponse): void {
+    if (!this.config.enableWebSocket) {
+      this.platform.log.debug('"%s": push notifications disabled by config.', this.config.name);
+      return;
+    }
+
+    const port = config.websocket_port;
+    if (!Number.isInteger(port) || (port as number) <= 0) {
+      return;
+    }
+
+    this.pushClient = this.pushClientFactory({
+      protocol: this.config.protocol === 'https' ? 'wss' : 'ws',
+      host: this.config.host,
+      port: port as number,
+      categories: ['player', 'volume', 'outputs', 'queue', 'options'],
+      onEvent: () => void this.poll(),
+      onConnectionChange: (connected) => this.handlePushConnectionChange(connected),
+      log: this.platform.log,
+    });
+    this.pushClient.connect();
+  }
+
+  /** Switches the poll timer between the fast configured interval and the slow WebSocket-connected reconciliation interval. */
+  private handlePushConnectionChange(connected: boolean): void {
+    if (this.wsConnected === connected) {
+      return;
+    }
+    this.wsConnected = connected;
+    this.restartPollTimer();
   }
 
   /* -------------------------------------------------------------------- *

@@ -77,6 +77,13 @@
               "minimum": 1,
               "maximum": 3600
             },
+            "enableWebSocket": {
+              "title": "Use Push Notifications",
+              "description": "When the server supports it, subscribes to its WebSocket for near-instant updates and backs off polling to an infrequent safety-net check. Disable to always poll at the interval above instead.",
+              "type": "boolean",
+              "default": true,
+              "required": false
+            },
             "exposeTrackSwitches": {
               "title": "Expose Next/Previous/Play-Pause Switches",
               "description": "Adds stateless switches for next track, previous track and play/pause. Useful for automations and when the Apple Remote mapping is not enough.",
@@ -158,6 +165,7 @@
             { "key": "servers[].port", "type": "number" },
             { "key": "servers[].timeout", "type": "number" },
             { "key": "servers[].pollingInterval", "type": "number" },
+            "servers[].enableWebSocket",
             "servers[].exposeTrackSwitches",
             "servers[].ignoreCertificateErrors",
             "servers[].username",

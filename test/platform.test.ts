@@ -59,8 +59,24 @@ describe('resolveServerConfigs', () => {
       bearerToken: undefined,
       ignoreCertificateErrors: false,
       exposeTrackSwitches: false,
+      enableWebSocket: true,
       outputs: [],
     });
+  });
+
+  it('defaults enableWebSocket to true, and respects an explicit false', () => {
+    const servers = resolveServerConfigs(
+      {
+        servers: [
+          { name: 'A', host: 'a' },
+          { name: 'B', host: 'b', enableWebSocket: true },
+          { name: 'C', host: 'c', enableWebSocket: false },
+        ],
+      } as OwnTonePlatformConfig,
+      log,
+    );
+
+    expect(servers.map((server) => server.enableWebSocket)).toEqual([true, true, false]);
   });
 
   it('uses the default polling interval when it is omitted or unusable', () => {

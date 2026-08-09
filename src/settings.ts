@@ -32,3 +32,18 @@ export const LOG_THROTTLE_WINDOW = 60_000;
 
 /** How long an optional track switch stays "on" before resetting itself, in ms. */
 export const SWITCH_RESET_DELAY = 500;
+
+/**
+ * How often to poll as a reconciliation safety net while the push
+ * notification WebSocket is connected and healthy, in ms. A WebSocket can
+ * stay "open" while actually dead (a NAT/firewall dropping a long-idle
+ * connection without a close frame, for example), so this bounds how stale
+ * HomeKit state can ever get even if that happens.
+ */
+export const WEBSOCKET_RECONCILE_INTERVAL_MS = 5 * 60 * 1000;
+
+/** Initial delay before retrying a dropped push-notification connection, in ms. */
+export const WEBSOCKET_RECONNECT_MIN_DELAY_MS = 2000;
+
+/** Cap on the reconnect backoff delay for the push-notification connection, in ms. */
+export const WEBSOCKET_RECONNECT_MAX_DELAY_MS = 60_000;

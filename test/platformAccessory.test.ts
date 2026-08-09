@@ -2,10 +2,11 @@ import type { PlatformAccessory, Service } from 'homebridge';
 
 import type { OwnToneClient } from '../src/owntoneClient';
 import { UnsupportedFeatureError } from '../src/owntoneClient';
+import type { OwnTonePushClient, OwnTonePushClientOptions } from '../src/owntonePushClient';
 import type { OwnTonePlatform } from '../src/platform';
 import { OwnTonePlatformAccessory, sanitizeHapName } from '../src/platformAccessory';
 import { serverIdentity } from '../src/platform';
-import { DEFAULT_POLLING_INTERVAL } from '../src/settings';
+import { DEFAULT_POLLING_INTERVAL, WEBSOCKET_RECONCILE_INTERVAL_MS } from '../src/settings';
 import type { OutputSnapshot, PlayerSnapshot, ResolvedServerConfig, TrackSnapshot } from '../src/types';
 import {
   Characteristic,
@@ -29,6 +30,7 @@ function serverConfig(overrides: Partial<ResolvedServerConfig> = {}): ResolvedSe
     timeout: 5000,
     ignoreCertificateErrors: false,
     exposeTrackSwitches: false,
+    enableWebSocket: true,
     outputs: [],
     ...overrides,
   };
@@ -129,11 +131,41 @@ interface Harness {
   speaker: Service;
 }
 
+interface FakePushClientInstance {
+  options: OwnTonePushClientOptions;
+  connect: jest.Mock;
+  dispose: jest.Mock;
+}
+
+/**
+ * Stub push-client factory: records the options each "connection" was
+ * created with and lets tests drive `onEvent`/`onConnectionChange`
+ * manually, without opening a real socket. `OwnTonePushClient` itself is
+ * unit-tested separately in owntonePushClient.test.ts — this is purely
+ * about the integration seam in platformAccessory.ts.
+ */
+function createFakePushClientFactory(): {
+  factory: (options: OwnTonePushClientOptions) => OwnTonePushClient;
+  instances: FakePushClientInstance[];
+} {
+  const instances: FakePushClientInstance[] = [];
+  const factory = (options: OwnTonePushClientOptions): OwnTonePushClient => {
+    const instance: FakePushClientInstance = { options, connect: jest.fn(), dispose: jest.fn() };
+    instances.push(instance);
+    return instance as unknown as OwnTonePushClient;
+  };
+  return { factory, instances };
+}
+
 async function flush(): Promise<void> {
   await jest.advanceTimersByTimeAsync(0);
 }
 
-async function build(config: Partial<ResolvedServerConfig> = {}, client = createFakeClient()): Promise<Harness> {
+async function build(
+  config: Partial<ResolvedServerConfig> = {},
+  client = createFakeClient(),
+  pushClientFactory?: (options: OwnTonePushClientOptions) => OwnTonePushClient,
+): Promise<Harness> {
   const resolved = serverConfig(config);
   const api = createMockApi();
   const log = createMockLog();
@@ -145,7 +177,13 @@ async function build(config: Partial<ResolvedServerConfig> = {}, client = create
   } as unknown as OwnTonePlatform;
 
   const accessory = createAccessory(resolved.name, serverIdentity(resolved));
-  const handler = new OwnTonePlatformAccessory(platform, accessory, resolved, client as unknown as OwnToneClient);
+  const handler = new OwnTonePlatformAccessory(
+    platform,
+    accessory,
+    resolved,
+    client as unknown as OwnToneClient,
+    pushClientFactory,
+  );
   await flush();
 
   return {
@@ -719,6 +757,124 @@ describe('OwnTonePlatformAccessory — polling', () => {
     expect(television.getCharacteristic(Characteristic.Active).value).toBe(Characteristic.Active.ACTIVE);
     expect(accessory.services.filter((service) => service.UUID === HapService.InputSource.UUID)).toHaveLength(1);
     handler.dispose();
+  });
+});
+
+describe('OwnTonePlatformAccessory — push notifications', () => {
+  it('connects the push client when the server advertises a websocket port', async () => {
+    const client = createFakeClient();
+    client.getConfig.mockResolvedValue({ version: '28.4', websocket_port: 3688 });
+    const { factory, instances } = createFakePushClientFactory();
+
+    const { handler } = await build({}, client, factory);
+    await flush();
+
+    expect(instances).toHaveLength(1);
+    expect(instances[0].options).toMatchObject({
+      protocol: 'ws',
+      host: '192.168.1.50',
+      port: 3688,
+      categories: ['player', 'volume', 'outputs', 'queue', 'options'],
+    });
+    expect(instances[0].connect).toHaveBeenCalledTimes(1);
+
+    handler.dispose();
+  });
+
+  it('maps an https server to a wss push connection', async () => {
+    const client = createFakeClient();
+    client.getConfig.mockResolvedValue({ version: '28.4', websocket_port: 3688 });
+    const { factory, instances } = createFakePushClientFactory();
+
+    const { handler } = await build({ protocol: 'https' }, client, factory);
+    await flush();
+
+    expect(instances[0].options.protocol).toBe('wss');
+
+    handler.dispose();
+  });
+
+  it('does not connect a push client when the server has no websocket port', async () => {
+    const client = createFakeClient();
+    const { factory, instances } = createFakePushClientFactory();
+
+    const { handler } = await build({}, client, factory);
+    await flush();
+
+    expect(instances).toHaveLength(0);
+
+    handler.dispose();
+  });
+
+  it('does not connect a push client when enableWebSocket is disabled, even if the server advertises one', async () => {
+    const client = createFakeClient();
+    client.getConfig.mockResolvedValue({ version: '28.4', websocket_port: 3688 });
+    const { factory, instances } = createFakePushClientFactory();
+
+    const { handler } = await build({ enableWebSocket: false }, client, factory);
+    await flush();
+
+    expect(instances).toHaveLength(0);
+
+    handler.dispose();
+  });
+
+  it('triggers an immediate poll when the push client reports an event', async () => {
+    const client = createFakeClient();
+    client.getConfig.mockResolvedValue({ version: '28.4', websocket_port: 3688 });
+    const { factory, instances } = createFakePushClientFactory();
+
+    const { handler } = await build({}, client, factory);
+    await flush();
+    expect(client.getStatus).toHaveBeenCalledTimes(1);
+
+    instances[0].options.onEvent();
+    await flush();
+
+    expect(client.getStatus).toHaveBeenCalledTimes(2);
+
+    handler.dispose();
+  });
+
+  it('polls at the reconciliation interval while the push connection is healthy, and reverts immediately when it drops', async () => {
+    const client = createFakeClient();
+    client.getConfig.mockResolvedValue({ version: '28.4', websocket_port: 3688 });
+    const { factory, instances } = createFakePushClientFactory();
+
+    const { handler } = await build({}, client, factory);
+    await flush();
+    expect(client.getStatus).toHaveBeenCalledTimes(1);
+
+    instances[0].options.onConnectionChange(true);
+
+    // Well under the reconciliation interval — no extra poll yet, even
+    // though several multiples of the old fast interval have passed.
+    await jest.advanceTimersByTimeAsync(POLL_MS * 3);
+    expect(client.getStatus).toHaveBeenCalledTimes(1);
+
+    // The reconciliation interval elapses — one more poll.
+    await jest.advanceTimersByTimeAsync(WEBSOCKET_RECONCILE_INTERVAL_MS - POLL_MS * 3);
+    expect(client.getStatus).toHaveBeenCalledTimes(2);
+
+    // Connection drops — fast polling resumes immediately.
+    instances[0].options.onConnectionChange(false);
+    await jest.advanceTimersByTimeAsync(POLL_MS);
+    expect(client.getStatus).toHaveBeenCalledTimes(3);
+
+    handler.dispose();
+  });
+
+  it('disposes the push client when the accessory is disposed', async () => {
+    const client = createFakeClient();
+    client.getConfig.mockResolvedValue({ version: '28.4', websocket_port: 3688 });
+    const { factory, instances } = createFakePushClientFactory();
+
+    const { handler } = await build({}, client, factory);
+    await flush();
+
+    handler.dispose();
+
+    expect(instances[0].dispose).toHaveBeenCalledTimes(1);
   });
 });
 
