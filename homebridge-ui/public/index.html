@@ -1,15 +1,58 @@
-<div class="card">
-  <div class="card-body">
-    <h5 class="card-title mb-1">Connection Test</h5>
-    <p class="card-text text-muted small mb-3">
-      Checks that Homebridge can reach each server's OwnTone JSON API (<code>GET /api/config</code>) and
-      that it answers with HTTP 200. The request is made by Homebridge itself, not your browser.
-    </p>
-    <div id="ownToneTestRows"></div>
-    <p id="ownToneTestEmpty" class="text-muted small mb-0" style="display: none;">
-      Add a server below, then fill in its host, to enable a connection test.
-    </p>
-  </div>
+<style>
+  /*
+   * Homebridge UI forces `body { color: white !important }` in dark mode but
+   * never reskins Bootstrap's `.card` (still a hardcoded white background) or
+   * `.text-muted` (hardcoded light-theme gray, also `!important`), so those
+   * classes can't be relied on here — this panel themes itself explicitly
+   * off the `dark-mode` class Homebridge adds to <body> instead.
+   */
+  .owntone-panel {
+    border: 1px solid rgba(127, 127, 127, 0.35);
+    border-radius: 0.5rem;
+    padding: 1rem 1.25rem;
+    margin-bottom: 1rem;
+  }
+  body:not(.dark-mode) .owntone-panel {
+    background: #ffffff;
+    color: #212529;
+  }
+  body.dark-mode .owntone-panel {
+    background: #2c2c2c;
+    color: #ffffff;
+  }
+  .owntone-panel .owntone-subtle {
+    opacity: 0.7;
+    font-size: 0.875em;
+  }
+  .owntone-panel .owntone-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.5rem 0;
+  }
+  .owntone-panel .owntone-row + .owntone-row {
+    border-top: 1px solid rgba(127, 127, 127, 0.25);
+  }
+  .owntone-panel .owntone-status {
+    font-size: 0.875em;
+    margin-top: 0.25rem;
+  }
+  .owntone-status.owntone-status-ok { color: #4caf50; }
+  .owntone-status.owntone-status-error { color: #ef5350; }
+  .owntone-status.owntone-status-pending { opacity: 0.7; }
+</style>
+
+<div class="owntone-panel">
+  <h5 style="margin: 0 0 0.25rem;">Connection Test</h5>
+  <p class="owntone-subtle" style="margin-bottom: 0.75rem;">
+    Checks that Homebridge can reach each server's OwnTone JSON API (<code>GET /api/config</code>) and
+    that it answers with HTTP 200. The request is made by Homebridge itself, not your browser.
+  </p>
+  <div id="ownToneTestRows"></div>
+  <p id="ownToneTestEmpty" class="owntone-subtle" style="margin: 0; display: none;">
+    Add a server below, then fill in its host, to enable a connection test.
+  </p>
 </div>
 
 <script>
@@ -47,19 +90,16 @@
         const port = server.port || 3689;
 
         const row = document.createElement('div');
-        row.className = 'd-flex align-items-center justify-content-between py-2';
-        if (index < servers.length - 1) {
-          row.style.borderBottom = '1px solid var(--bs-border-color, #dee2e6)';
-        }
+        row.className = 'owntone-row';
 
         const info = document.createElement('div');
         info.innerHTML = `
           <div>${label}</div>
-          <div class="text-muted small">${server.host ? `${protocol}://${server.host}:${port}` : 'No host set'}</div>
+          <div class="owntone-subtle">${server.host ? `${protocol}://${server.host}:${port}` : 'No host set'}</div>
         `;
 
         const controls = document.createElement('div');
-        controls.className = 'text-end';
+        controls.style.textAlign = 'right';
 
         const button = document.createElement('button');
         button.type = 'button';
@@ -68,13 +108,13 @@
         button.disabled = !testable;
 
         const status = document.createElement('div');
-        status.className = 'small mt-1';
+        status.className = 'owntone-status';
 
         button.addEventListener('click', async () => {
           button.disabled = true;
           const originalText = button.textContent;
           button.textContent = 'Testing…';
-          status.className = 'small mt-1 text-muted';
+          status.className = 'owntone-status owntone-status-pending';
           status.textContent = 'Contacting server…';
 
           try {
@@ -90,17 +130,17 @@
             });
 
             if (result.ok) {
-              status.className = 'small mt-1 text-success';
+              status.className = 'owntone-status owntone-status-ok';
               status.textContent = `✓ ${result.message}`;
               homebridge.toast.success(result.message, label);
             } else {
-              status.className = 'small mt-1 text-danger';
+              status.className = 'owntone-status owntone-status-error';
               status.textContent = `✗ ${result.message}`;
               homebridge.toast.error(result.message, label);
             }
           } catch (error) {
             const message = (error && error.message) || 'Connection test failed.';
-            status.className = 'small mt-1 text-danger';
+            status.className = 'owntone-status owntone-status-error';
             status.textContent = `✗ ${message}`;
             homebridge.toast.error(message, label);
           } finally {
@@ -124,9 +164,23 @@
       render();
     });
 
-    const initialBlocks = await homebridge.getPluginConfig();
-    servers = Array.isArray(initialBlocks[0] && initialBlocks[0].servers) ? initialBlocks[0].servers : [];
-    render();
+    try {
+      let blocks = await homebridge.getPluginConfig();
+
+      // A brand-new / unconfigured install has no saved config block yet.
+      // Homebridge UI only mounts the schema-generated form once at least
+      // one block exists, so seed a default one — the user still edits it
+      // (and adds servers) in the form below, nothing is auto-saved here.
+      if (!Array.isArray(blocks) || blocks.length === 0) {
+        blocks = [{ platform: 'OwnTone', name: 'OwnTone', servers: [] }];
+        await homebridge.updatePluginConfig(blocks);
+      }
+
+      servers = Array.isArray(blocks[0] && blocks[0].servers) ? blocks[0].servers : [];
+      render();
+    } catch (error) {
+      console.error('OwnTone custom UI failed to load plugin config', error);
+    }
 
     homebridge.showSchemaForm();
   })();
