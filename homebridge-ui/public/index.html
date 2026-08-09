@@ -133,6 +133,17 @@
     font-size: 0.9em;
     padding: 0.5rem 0.1rem;
   }
+
+  /*
+   * servers[].outputs (config.schema.json) is a real array field so the
+   * schema form's own array-item model tracks and persists it like any
+   * other field — but it's a cache the "Refresh Outputs" button writes,
+   * not something a user fills in, so it's hidden rather than removed from
+   * the form entirely.
+   */
+  .owntone-hidden-field {
+    display: none !important;
+  }
 </style>
 
 <div id="ownTonePanel" class="owntone-panel" style="display: none;">
@@ -424,6 +435,22 @@
       applyServers(serversFromBlocks(blocks));
     } catch (error) {
       console.error('OwnTone custom UI failed to load plugin config', error);
+    }
+
+    // There's no supported customUi API for choosing where this panel sits
+    // relative to the schema-generated form — both are injected into the
+    // same shared container, with this panel's markup landing first. Once
+    // the form mounts (as later sibling nodes in that same container), keep
+    // re-appending the panel so it ends up last, i.e. after the form. Safe
+    // even if the assumption is wrong: worst case this is a no-op.
+    const panelContainer = panelEl.parentElement;
+    if (panelContainer) {
+      const keepPanelLast = new MutationObserver(() => {
+        if (panelContainer.lastElementChild !== panelEl) {
+          panelContainer.appendChild(panelEl);
+        }
+      });
+      keepPanelLast.observe(panelContainer, { childList: true });
     }
 
     homebridge.showSchemaForm();

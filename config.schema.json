@@ -162,7 +162,20 @@
             "servers[].ignoreCertificateErrors",
             "servers[].username",
             "servers[].password",
-            "servers[].bearerToken"
+            "servers[].bearerToken",
+            {
+              "key": "servers[].outputs",
+              "type": "array",
+              "notitle": true,
+              "htmlClass": "owntone-hidden-field",
+              "items": [
+                "servers[].outputs[].id",
+                "servers[].outputs[].name",
+                "servers[].outputs[].type",
+                "servers[].outputs[].selected",
+                { "key": "servers[].outputs[].volume", "type": "number" }
+              ]
+            }
           ]
         }
       ]
