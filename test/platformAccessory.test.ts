@@ -351,6 +351,21 @@ describe('OwnTonePlatformAccessory — state mapping', () => {
     handler.dispose();
   });
 
+  it('updates the speaker volume on later polls when it changes on the server', async () => {
+    const client = createFakeClient();
+    const { speaker, handler } = await build({}, client);
+
+    expect(speaker.getCharacteristic(Characteristic.Volume).value).toBe(40);
+
+    client.getStatus.mockResolvedValue(playing({ volume: 75 }));
+    await jest.advanceTimersByTimeAsync(POLL_MS);
+
+    expect(speaker.getCharacteristic(Characteristic.Volume).value).toBe(75);
+    expect(speaker.getCharacteristic(Characteristic.Mute).value).toBe(false);
+
+    handler.dispose();
+  });
+
   it('reports mute when the OwnTone volume is zero', async () => {
     const client = createFakeClient();
     client.getStatus.mockResolvedValue(playing({ volume: 0 }));
@@ -556,19 +571,19 @@ describe('OwnTonePlatformAccessory — polling', () => {
     const client = createFakeClient();
     const { log, handler } = await build({}, client);
 
-    expect(log.debug).toHaveBeenCalledWith(
+    expect(log.info).toHaveBeenCalledWith(
       '"%s": poll complete — %s',
       'Living Room Music',
       expect.stringContaining('now playing "Angels" by "The xx"'),
     );
 
-    log.debug.mockClear();
+    log.info.mockClear();
     client.getNowPlaying.mockResolvedValue(track({ title: 'Angels', artist: 'The xx' }));
     await jest.advanceTimersByTimeAsync(POLL_MS);
 
     // Same track again — logTrackChange wouldn't log this, but the
     // poll-complete summary should still fire every cycle.
-    expect(log.debug).toHaveBeenCalledWith(
+    expect(log.info).toHaveBeenCalledWith(
       '"%s": poll complete — %s',
       'Living Room Music',
       expect.stringContaining('now playing "Angels" by "The xx"'),

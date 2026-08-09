@@ -525,7 +525,7 @@ export class OwnTonePlatformAccessory {
     this.pushStateToHomeKit();
     void this.refreshArtwork();
 
-    this.platform.log.debug('"%s": poll complete — %s', this.config.name, this.describeTrack(this.track));
+    this.platform.log.info('"%s": poll complete — %s', this.config.name, this.describeTrack(this.track));
   }
 
   private onPollFailure(error: unknown): void {
