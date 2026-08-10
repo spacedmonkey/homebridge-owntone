@@ -21,6 +21,14 @@ export interface OwnToneServerConfig {
   bearerToken?: string;
   ignoreCertificateErrors?: boolean;
   exposeTrackSwitches?: boolean;
+  /**
+   * Also publish Mute and (if `exposeTrackSwitches` is on) Play/Pause,
+   * Next and Previous as native Matter accessories via Homebridge's Matter
+   * Plugin API. Off by default: the API only exists on Homebridge 2.x, and
+   * Matter has no equivalent of this plugin's Television/Speaker/output
+   * accessory, so only these simple on/off states can ever be exposed.
+   */
+  enableMatter?: boolean;
   /** Whether to use the server's push-notification WebSocket, when it advertises one. Defaults to `true`. */
   enableWebSocket?: boolean;
   /**
@@ -56,6 +64,8 @@ export interface ResolvedServerConfig {
   bearerToken?: string;
   ignoreCertificateErrors: boolean;
   exposeTrackSwitches: boolean;
+  /** Whether to also publish Matter-native accessories for Mute, Play/Pause, Next and Previous. */
+  enableMatter: boolean;
   /** Whether to use the server's push-notification WebSocket, when it advertises one. */
   enableWebSocket: boolean;
   /** Minutes between proactive reconnects of an already-healthy push WebSocket. Only applies when `enableWebSocket` is on. */

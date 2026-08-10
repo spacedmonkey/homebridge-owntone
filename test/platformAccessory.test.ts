@@ -1,5 +1,6 @@
 import type { PlatformAccessory, Service } from 'homebridge';
 
+import type { MatterAccessoryDefinition, MatterAPI } from '../src/matterTypes';
 import type { OwnToneClient } from '../src/owntoneClient';
 import { UnsupportedFeatureError } from '../src/owntoneClient';
 import type { OwnTonePushClient, OwnTonePushClientOptions } from '../src/owntonePushClient';
@@ -15,8 +16,49 @@ import {
   createMockApi,
   createMockLog,
   uuid,
+  type MockApi,
   type MockLog,
 } from './helpers/homebridgeMock';
+
+interface MockMatterApi {
+  matter: MatterAPI;
+  registered: MatterAccessoryDefinition[];
+  registerPlatformAccessories: jest.Mock;
+  updateAccessoryState: jest.Mock;
+}
+
+function createMockMatterApi(): MockMatterApi {
+  const registered: MatterAccessoryDefinition[] = [];
+
+  const registerPlatformAccessories = jest.fn(async (_plugin: string, _platform: string, accessories: MatterAccessoryDefinition[]) => {
+    registered.push(...accessories);
+  });
+  const updateAccessoryState = jest.fn().mockResolvedValue(undefined);
+
+  const matter: MatterAPI = {
+    uuid: { generate: (data: string) => `matter-uuid:${data}` },
+    deviceTypes: { OnOffSwitch: 'OnOffSwitch' },
+    registerPlatformAccessories,
+    updateAccessoryState,
+  };
+
+  return { matter, registered, registerPlatformAccessories, updateAccessoryState };
+}
+
+function accessoryByDisplayName(registered: MatterAccessoryDefinition[], displayName: string): MatterAccessoryDefinition {
+  const accessory = registered.find((entry) => entry.displayName === displayName);
+  if (!accessory) {
+    throw new Error(`No registered Matter accessory named "${displayName}"; got: ${registered.map((a) => a.displayName).join(', ')}`);
+  }
+  return accessory;
+}
+
+/** A `MockApi` with a `matter` property attached, simulating Homebridge 2.x. */
+function apiWithMatter(matter: MatterAPI): MockApi {
+  const api = createMockApi();
+  (api as unknown as { matter: MatterAPI }).matter = matter;
+  return api;
+}
 
 const POLL_MS = DEFAULT_POLLING_INTERVAL * 1000;
 
@@ -30,6 +72,7 @@ function serverConfig(overrides: Partial<ResolvedServerConfig> = {}): ResolvedSe
     timeout: 5000,
     ignoreCertificateErrors: false,
     exposeTrackSwitches: false,
+    enableMatter: false,
     enableWebSocket: true,
     pushReconnectInterval: DEFAULT_PUSH_RECONNECT_INTERVAL_MINUTES,
     outputs: [],
@@ -130,6 +173,7 @@ interface Harness {
   log: MockLog;
   television: Service;
   speaker: Service;
+  api: MockApi;
 }
 
 interface FakePushClientInstance {
@@ -167,9 +211,9 @@ async function build(
   config: Partial<ResolvedServerConfig> = {},
   client = createFakeClient(),
   pushClientFactory?: (options: OwnTonePushClientOptions) => OwnTonePushClient,
+  api: MockApi = createMockApi(),
 ): Promise<Harness> {
   const resolved = serverConfig(config);
-  const api = createMockApi();
   const log = createMockLog();
   const platform = {
     Service: HapService,
@@ -195,6 +239,7 @@ async function build(
     log,
     television: accessory.getService(HapService.Television) as Service,
     speaker: accessory.getServiceById(HapService.TelevisionSpeaker, 'owntone-speaker') as Service,
+    api,
   };
 }
 
@@ -354,6 +399,7 @@ describe('OwnTonePlatformAccessory — services', () => {
     expect(accessory.getServiceById(HapService.Switch, 'owntone-next')).toBeDefined();
     expect(accessory.getServiceById(HapService.Switch, 'owntone-previous')).toBeDefined();
     expect(accessory.getServiceById(HapService.Switch, 'owntone-playpause')).toBeDefined();
+    expect(accessory.getServiceById(HapService.Switch, 'owntone-mute')).toBeDefined();
     handler.dispose();
   });
 
@@ -674,6 +720,191 @@ describe('OwnTonePlatformAccessory — play/pause switch', () => {
 
     await expect(playPauseSwitch.getCharacteristic(Characteristic.On).handleSetRequest(true)).rejects.toBeDefined();
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('failed'), 'Living Room Music', 'play', 'connect ECONNREFUSED');
+
+    handler.dispose();
+  });
+});
+
+describe('OwnTonePlatformAccessory — mute switch', () => {
+  it('is not created by default', async () => {
+    const { accessory, handler } = await build();
+    expect(accessory.getServiceById(HapService.Switch, 'owntone-mute')).toBeUndefined();
+    handler.dispose();
+  });
+
+  it('reflects the current mute state when exposeTrackSwitches is on', async () => {
+    const client = createFakeClient();
+    client.getStatus.mockResolvedValue(playing({ volume: 0 }));
+
+    const { accessory, handler } = await build({ exposeTrackSwitches: true }, client);
+    const muteSwitch = accessory.getServiceById(HapService.Switch, 'owntone-mute') as Service;
+
+    expect(muteSwitch.getCharacteristic(Characteristic.On).value).toBe(true);
+    handler.dispose();
+  });
+
+  it('follows mute state across later polls, same as the Speaker Mute characteristic', async () => {
+    const client = createFakeClient();
+    const { accessory, speaker, handler } = await build({ exposeTrackSwitches: true }, client);
+    const muteSwitch = accessory.getServiceById(HapService.Switch, 'owntone-mute') as Service;
+
+    expect(muteSwitch.getCharacteristic(Characteristic.On).value).toBe(false);
+
+    client.getStatus.mockResolvedValue(playing({ volume: 0 }));
+    await jest.advanceTimersByTimeAsync(POLL_MS);
+
+    expect(muteSwitch.getCharacteristic(Characteristic.On).value).toBe(true);
+    expect(speaker.getCharacteristic(Characteristic.Mute).value).toBe(true);
+
+    handler.dispose();
+  });
+
+  it('calls setMute(true)/(false) the same way the Speaker Mute characteristic does', async () => {
+    const { accessory, client, handler } = await build({ exposeTrackSwitches: true });
+    const muteSwitch = accessory.getServiceById(HapService.Switch, 'owntone-mute') as Service;
+
+    await muteSwitch.getCharacteristic(Characteristic.On).handleSetRequest(true);
+    expect(client.setMute).toHaveBeenCalledWith(true);
+
+    await muteSwitch.getCharacteristic(Characteristic.On).handleSetRequest(false);
+    expect(client.setMute).toHaveBeenCalledWith(false);
+
+    handler.dispose();
+  });
+});
+
+describe('OwnTonePlatformAccessory — Matter accessories', () => {
+  it('does not register anything when enableMatter is off, even with a Matter-capable Homebridge', async () => {
+    const { matter, registerPlatformAccessories } = createMockMatterApi();
+    const { handler } = await build({ enableMatter: false, exposeTrackSwitches: true }, undefined, undefined, apiWithMatter(matter));
+
+    expect(registerPlatformAccessories).not.toHaveBeenCalled();
+    handler.dispose();
+  });
+
+  it('warns once and does nothing when enableMatter is on but Homebridge has no Matter Plugin API', async () => {
+    const { log, handler } = await build({ enableMatter: true, exposeTrackSwitches: true }, undefined, undefined, createMockApi());
+
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('Matter'), 'Living Room Music');
+    handler.dispose();
+  });
+
+  it('registers nothing when exposeTrackSwitches is off, even with enableMatter on — Matter accessories mirror the opt-in HomeKit buttons, never introduced on their own', async () => {
+    const { matter, registerPlatformAccessories } = createMockMatterApi();
+    const { handler } = await build({ enableMatter: true, exposeTrackSwitches: false }, undefined, undefined, apiWithMatter(matter));
+
+    expect(registerPlatformAccessories).not.toHaveBeenCalled();
+    handler.dispose();
+  });
+
+  it('registers Mute, Play/Pause, Next and Previous when exposeTrackSwitches is also on', async () => {
+    const { matter, registered } = createMockMatterApi();
+    const { handler } = await build({ enableMatter: true, exposeTrackSwitches: true }, undefined, undefined, apiWithMatter(matter));
+
+    expect(registered.map((accessory) => accessory.displayName).sort()).toEqual([
+      'Living Room Music Mute',
+      'Living Room Music Next Track',
+      'Living Room Music Play/Pause',
+      'Living Room Music Previous Track',
+    ]);
+    handler.dispose();
+  });
+
+  it('seeds each accessory at "off" (registration happens before the first poll resolves) with required identity fields', async () => {
+    const client = createFakeClient();
+    client.getStatus.mockResolvedValue(playing({ state: 'pause', volume: 0 }));
+    const { matter, registered } = createMockMatterApi();
+    const { handler } = await build({ enableMatter: true, exposeTrackSwitches: true }, client, undefined, apiWithMatter(matter));
+
+    const mute = accessoryByDisplayName(registered, 'Living Room Music Mute');
+    expect(mute.clusters?.onOff).toEqual({ onOff: false });
+    expect(mute.manufacturer).toBe('OwnTone');
+    expect(mute.UUID).toBeTruthy();
+    expect(mute.serialNumber).toBeTruthy();
+
+    const playPause = accessoryByDisplayName(registered, 'Living Room Music Play/Pause');
+    expect(playPause.clusters?.onOff).toEqual({ onOff: false });
+
+    handler.dispose();
+  });
+
+  it('corrects the seeded "off" state to reality as soon as the first poll resolves', async () => {
+    const client = createFakeClient();
+    // Muted (volume 0) from the very first poll — the seed above cannot know this yet.
+    client.getStatus.mockResolvedValue(playing({ volume: 0 }));
+    const { matter, registered, updateAccessoryState } = createMockMatterApi();
+    const { handler } = await build({ enableMatter: true, exposeTrackSwitches: true }, client, undefined, apiWithMatter(matter));
+
+    const mute = accessoryByDisplayName(registered, 'Living Room Music Mute');
+    expect(updateAccessoryState).toHaveBeenCalledWith(mute.UUID, 'onOff', { onOff: true });
+
+    const playPause = accessoryByDisplayName(registered, 'Living Room Music Play/Pause');
+    expect(updateAccessoryState).toHaveBeenCalledWith(playPause.UUID, 'onOff', { onOff: true });
+
+    handler.dispose();
+  });
+
+  it('Mute handler calls setMute(true)/(false) the same way the HomeKit Mute switch does', async () => {
+    const client = createFakeClient();
+    const { matter, registered } = createMockMatterApi();
+    const { handler } = await build({ enableMatter: true, exposeTrackSwitches: true }, client, undefined, apiWithMatter(matter));
+
+    const mute = accessoryByDisplayName(registered, 'Living Room Music Mute');
+    await mute.handlers?.onOff?.on?.();
+    expect(client.setMute).toHaveBeenCalledWith(true);
+
+    await mute.handlers?.onOff?.off?.();
+    expect(client.setMute).toHaveBeenCalledWith(false);
+
+    handler.dispose();
+  });
+
+  it('Play/Pause handler calls play()/pause() the same way the HomeKit switch does', async () => {
+    const client = createFakeClient();
+    const { matter, registered } = createMockMatterApi();
+    const { handler } = await build({ enableMatter: true, exposeTrackSwitches: true }, client, undefined, apiWithMatter(matter));
+
+    const playPause = accessoryByDisplayName(registered, 'Living Room Music Play/Pause');
+    await playPause.handlers?.onOff?.off?.();
+    expect(client.pause).toHaveBeenCalled();
+
+    await playPause.handlers?.onOff?.on?.();
+    expect(client.play).toHaveBeenCalled();
+
+    handler.dispose();
+  });
+
+  it('Next/Previous handlers run the action and auto-reset back to off, mirroring the HomeKit momentary switches', async () => {
+    const client = createFakeClient();
+    const { matter, registered, updateAccessoryState } = createMockMatterApi();
+    const { handler } = await build({ enableMatter: true, exposeTrackSwitches: true }, client, undefined, apiWithMatter(matter));
+
+    const next = accessoryByDisplayName(registered, 'Living Room Music Next Track');
+    await next.handlers?.onOff?.on?.();
+    expect(client.next).toHaveBeenCalled();
+    expect(updateAccessoryState).not.toHaveBeenCalledWith(next.UUID, 'onOff', { onOff: false });
+
+    await jest.advanceTimersByTimeAsync(600);
+    expect(updateAccessoryState).toHaveBeenCalledWith(next.UUID, 'onOff', { onOff: false });
+
+    handler.dispose();
+  });
+
+  it('pushes Mute and Play/Pause state changes to Matter on later polls, only when the value actually changed', async () => {
+    const client = createFakeClient();
+    const { matter, updateAccessoryState } = createMockMatterApi();
+    const { handler } = await build({ enableMatter: true, exposeTrackSwitches: true }, client, undefined, apiWithMatter(matter));
+
+    updateAccessoryState.mockClear();
+
+    // Unrelated field changes (progress) must not cause a spurious update.
+    client.getStatus.mockResolvedValue(playing({ progressMs: 2000 }));
+    await jest.advanceTimersByTimeAsync(POLL_MS);
+    expect(updateAccessoryState).not.toHaveBeenCalled();
+
+    client.getStatus.mockResolvedValue(playing({ state: 'pause' }));
+    await jest.advanceTimersByTimeAsync(POLL_MS);
+    expect(updateAccessoryState).toHaveBeenCalledWith(expect.stringContaining('playpause'), 'onOff', { onOff: false });
 
     handler.dispose();
   });

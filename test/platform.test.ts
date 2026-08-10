@@ -59,6 +59,7 @@ describe('resolveServerConfigs', () => {
       bearerToken: undefined,
       ignoreCertificateErrors: false,
       exposeTrackSwitches: false,
+      enableMatter: false,
       enableWebSocket: true,
       pushReconnectInterval: 15,
       outputs: [],

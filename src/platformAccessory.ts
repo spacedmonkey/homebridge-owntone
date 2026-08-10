@@ -7,6 +7,8 @@ import type {
 } from 'homebridge';
 
 import { ErrorThrottle } from './errorThrottle';
+import type { MatterAccessoryDefinition, MatterAPI } from './matterTypes';
+import { matterApiOf } from './matterTypes';
 import { OwnToneClient, UnsupportedFeatureError } from './owntoneClient';
 import type { OwnTonePushClientOptions } from './owntonePushClient';
 import { OwnTonePushClient } from './owntonePushClient';
@@ -15,6 +17,8 @@ import { serverIdentity } from './platform';
 import {
   DEFAULT_VOLUME_STEP,
   FAILURE_THRESHOLD,
+  PLATFORM_NAME,
+  PLUGIN_NAME,
   SEEK_STEP_MS,
   SWITCH_RESET_DELAY,
   WEBSOCKET_RECONCILE_INTERVAL_MS,
@@ -64,12 +68,13 @@ interface InputSourceEntry {
  * - `Television` for power/transport control and the Apple Remote,
  * - `TelevisionSpeaker` for volume and (emulated) mute,
  * - one `InputSource` per OwnTone output,
- * - optionally `Switch` services for next/previous/play-pause.
+ * - optionally `Switch` services for next/previous/play-pause/mute.
  */
 export class OwnTonePlatformAccessory {
   private readonly televisionService: Service;
   private readonly speakerService: Service;
   private playPauseSwitchService?: Service;
+  private muteSwitchService?: Service;
   private readonly inputs: InputSourceEntry[] = [];
   private readonly switchTimers = new Set<NodeJS.Timeout>();
   private readonly throttle = new ErrorThrottle();
@@ -81,6 +86,12 @@ export class OwnTonePlatformAccessory {
   private pushClient?: OwnTonePushClient;
   private wsConnected = false;
   private pushRefreshTimer?: NodeJS.Timeout;
+
+  private matterApi?: MatterAPI;
+  private matterMuteUuid?: string;
+  private matterMutedState?: boolean;
+  private matterPlayPauseUuid?: string;
+  private matterPlayingState?: boolean;
 
   private reachable = false;
   private player?: PlayerSnapshot;
@@ -117,6 +128,7 @@ export class OwnTonePlatformAccessory {
       this.configureTrackSwitches();
     }
 
+    void this.configureMatter();
     void this.loadFirmwareRevision();
     this.startPolling();
   }
@@ -315,6 +327,7 @@ export class OwnTonePlatformAccessory {
     this.addTrackSwitch('owntone-next', 'Next Track', () => this.client.next());
     this.addTrackSwitch('owntone-previous', 'Previous Track', () => this.client.previous());
     this.configurePlayPauseSwitch();
+    this.configureMuteSwitch();
   }
 
   /**
@@ -344,6 +357,30 @@ export class OwnTonePlatformAccessory {
       });
   }
 
+  /**
+   * A dedicated Mute switch alongside Play/Pause/Next/Previous, for
+   * automations and controllers that would rather flip a switch than dig
+   * into the Television speaker's `Mute` characteristic (which is still
+   * exposed and kept in sync regardless). Stateful like Play/Pause, not
+   * momentary like Next/Previous — see {@link handleMuteSet}.
+   */
+  private configureMuteSwitch(): void {
+    const { Service, Characteristic } = this.platform;
+    const displayName = `${this.config.name} Mute`;
+    const service =
+      this.accessory.getServiceById(Service.Switch, 'owntone-mute') ?? this.accessory.addService(Service.Switch, displayName, 'owntone-mute');
+
+    this.setIfSupported(service, 'ConfiguredName', displayName);
+    this.muteSwitchService = service;
+
+    service
+      .getCharacteristic(Characteristic.On)
+      .onGet(() => this.currentMuteState())
+      .onSet(async (value) => {
+        await this.handleMuteSet(value);
+      });
+  }
+
   private addTrackSwitch(subtype: string, name: string, action: () => Promise<void>): void {
     const { Service, Characteristic } = this.platform;
     const displayName = `${this.config.name} ${name}`;
@@ -370,6 +407,153 @@ export class OwnTonePlatformAccessory {
 
         await this.runCommand(name, action);
       });
+  }
+
+  /* -------------------------------------------------------------------- *
+   * Matter
+   * -------------------------------------------------------------------- */
+
+  /**
+   * Publishes Mute, Play/Pause, Next and Previous as native Matter
+   * accessories via Homebridge's Matter Plugin API (`api.matter`,
+   * Homebridge 2.x+) — mirroring the same opt-in HomeKit switches from
+   * {@link configureTrackSwitches}, one-for-one. There is no Matter device
+   * type for a TV/media-player, absolute volume or output selection, so the
+   * primary Television/Speaker/InputSource accessory has no Matter
+   * counterpart at all and stays HomeKit-only.
+   *
+   * A no-op unless `exposeTrackSwitches` is also on — Matter accessories are
+   * only ever published for buttons the user has already opted into having
+   * in HomeKit, never introduced as Matter-only extras. Also a no-op on
+   * Homebridge 1.x, where `api.matter` does not exist — logged once so the
+   * user knows `enableMatter` had no effect rather than silently doing
+   * nothing.
+   */
+  private async configureMatter(): Promise<void> {
+    if (!this.config.enableMatter || !this.config.exposeTrackSwitches) {
+      return;
+    }
+
+    const matter = matterApiOf(this.platform.api);
+    if (!matter) {
+      this.platform.log.warn(
+        '"%s": Matter support was requested but this Homebridge version has no Matter Plugin API (Homebridge 2.x is required); ignoring.',
+        this.config.name,
+      );
+      return;
+    }
+
+    const identity = serverIdentity(this.config);
+    const deviceType = matter.deviceTypes.OnOffSwitch;
+    const accessories: MatterAccessoryDefinition[] = [];
+
+    // Registration happens synchronously in the constructor, before the
+    // first poll has ever resolved, so there is no real state to seed with
+    // yet — both accessories start at `false` and get corrected by
+    // `pushStateToMatter()` as soon as the first poll (or push event)
+    // reports the real state, same as HomeKit briefly showing defaults
+    // before its first characteristic read.
+    this.matterMuteUuid = matter.uuid.generate(`${identity}:matter:mute`);
+    this.matterMutedState = false;
+    accessories.push({
+      UUID: this.matterMuteUuid,
+      displayName: `${this.config.name} Mute`,
+      deviceType,
+      serialNumber: `${this.serialNumber()}-mute`,
+      manufacturer: 'OwnTone',
+      model: 'OwnTone Mute',
+      clusters: { onOff: { onOff: this.matterMutedState } },
+      handlers: {
+        onOff: {
+          on: () => this.handleMuteSet(true),
+          off: () => this.handleMuteSet(false),
+        },
+      },
+    });
+
+    this.matterPlayPauseUuid = matter.uuid.generate(`${identity}:matter:playpause`);
+    this.matterPlayingState = false;
+    accessories.push({
+      UUID: this.matterPlayPauseUuid,
+      displayName: `${this.config.name} Play/Pause`,
+      deviceType,
+      serialNumber: `${this.serialNumber()}-playpause`,
+      manufacturer: 'OwnTone',
+      model: 'OwnTone Play/Pause',
+      clusters: { onOff: { onOff: this.matterPlayingState } },
+      handlers: {
+        onOff: {
+          on: async () => {
+            await this.runCommand('play', () => this.client.play(), true);
+            void this.poll();
+          },
+          off: async () => {
+            await this.runCommand('pause', () => this.client.pause(), true);
+            void this.poll();
+          },
+        },
+      },
+    });
+
+    accessories.push(this.momentaryMatterAccessory(matter, identity, 'next', 'Next Track', () => this.client.next()));
+    accessories.push(this.momentaryMatterAccessory(matter, identity, 'previous', 'Previous Track', () => this.client.previous()));
+
+    try {
+      await matter.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, accessories);
+      this.matterApi = matter;
+      this.platform.log.info(
+        '"%s": published %d Matter accessor%s (%s).',
+        this.config.name,
+        accessories.length,
+        accessories.length === 1 ? 'y' : 'ies',
+        accessories.map((accessory) => accessory.displayName).join(', '),
+      );
+    } catch (error) {
+      this.platform.log.warn('"%s": could not publish Matter accessories: %s', this.config.name, describeError(error));
+    }
+  }
+
+  /**
+   * Builds a Matter accessory for a momentary action (Next/Previous track):
+   * turning it on runs the action then auto-resets back to off after
+   * `SWITCH_RESET_DELAY`, the same "tap to trigger" pattern the HomeKit
+   * version of these switches uses in {@link addTrackSwitch} — Matter's
+   * `GenericSwitch` device type exists for physical momentary switches but
+   * isn't user-tappable in Apple Home, so `OnOffSwitch` is used here too.
+   */
+  private momentaryMatterAccessory(
+    matter: MatterAPI,
+    identity: string,
+    subtype: string,
+    name: string,
+    action: () => Promise<void>,
+  ): MatterAccessoryDefinition {
+    const uuid = matter.uuid.generate(`${identity}:matter:${subtype}`);
+
+    return {
+      UUID: uuid,
+      displayName: `${this.config.name} ${name}`,
+      deviceType: matter.deviceTypes.OnOffSwitch,
+      serialNumber: `${this.serialNumber()}-${subtype}`,
+      manufacturer: 'OwnTone',
+      model: `OwnTone ${name}`,
+      clusters: { onOff: { onOff: false } },
+      handlers: {
+        onOff: {
+          on: async () => {
+            const timer = setTimeout(() => {
+              this.switchTimers.delete(timer);
+              void this.matterApi
+                ?.updateAccessoryState(uuid, 'onOff', { onOff: false })
+                .catch((error) => this.platform.log.debug('"%s": could not reset Matter %s switch: %s', this.config.name, name, describeError(error)));
+            }, SWITCH_RESET_DELAY);
+            this.switchTimers.add(timer);
+
+            await this.runCommand(name, action);
+          },
+        },
+      },
+    };
   }
 
   /* -------------------------------------------------------------------- *
@@ -606,6 +790,7 @@ export class OwnTonePlatformAccessory {
     }
 
     this.pushStateToHomeKit();
+    this.pushStateToMatter();
     void this.refreshArtwork();
 
     this.platform.log.info('"%s": poll complete — %s', this.config.name, this.describeTrack(this.track));
@@ -634,6 +819,7 @@ export class OwnTonePlatformAccessory {
       this.player = undefined;
       this.track = undefined;
       this.pushStateToHomeKit();
+      this.pushStateToMatter();
     }
   }
 
@@ -648,9 +834,49 @@ export class OwnTonePlatformAccessory {
       this.updateIfChanged(this.playPauseSwitchService, Characteristic.On, this.isPlaying);
     }
 
+    if (this.muteSwitchService) {
+      this.updateIfChanged(this.muteSwitchService, Characteristic.On, this.currentMuteState());
+    }
+
     const volumeCharacteristic = this.optionalCharacteristic('Volume');
     if (volumeCharacteristic) {
       this.updateIfChanged(this.speakerService, volumeCharacteristic, this.player?.volume ?? 0);
+    }
+  }
+
+  /**
+   * Mirrors the subset of state that has a Matter accessory (see
+   * {@link configureMatter}) onto it. A no-op until that registration has
+   * completed — `matterApi` stays unset otherwise, including on Homebridge
+   * 1.x or while `enableMatter` is off.
+   */
+  private pushStateToMatter(): void {
+    if (!this.matterApi) {
+      return;
+    }
+
+    if (this.matterMuteUuid) {
+      const muted = this.currentMuteState() === true;
+      if (muted !== this.matterMutedState) {
+        this.matterMutedState = muted;
+        this.platform.log.debug('"%s": Matter Mute changed -> %s.', this.config.name, muted);
+        void this.matterApi
+          .updateAccessoryState(this.matterMuteUuid, 'onOff', { onOff: muted })
+          .catch((error) => this.platform.log.debug('"%s": could not update Matter Mute state: %s', this.config.name, describeError(error)));
+      }
+    }
+
+    if (this.matterPlayPauseUuid) {
+      const playing = this.isPlaying;
+      if (playing !== this.matterPlayingState) {
+        this.matterPlayingState = playing;
+        this.platform.log.debug('"%s": Matter Play/Pause changed -> %s.', this.config.name, playing);
+        void this.matterApi
+          .updateAccessoryState(this.matterPlayPauseUuid, 'onOff', { onOff: playing })
+          .catch((error) =>
+            this.platform.log.debug('"%s": could not update Matter Play/Pause state: %s', this.config.name, describeError(error)),
+          );
+      }
     }
   }
 

@@ -25,7 +25,9 @@ For every OwnTone server you configure, the plugin creates one HomeKit accessory
 | `Television` | Power (play/pause), Apple Remote keys, input selection |
 | `TelevisionSpeaker` | Volume up/down, absolute volume, mute |
 | `InputSource` | One per OwnTone output (speaker), plus a generic "OwnTone" source |
-| `Switch` *(optional)* | Next Track / Previous Track / Play-Pause, when `exposeTrackSwitches` is enabled |
+| `Switch` *(optional)* | Next Track / Previous Track / Play-Pause / Mute, when `exposeTrackSwitches` is enabled |
+
+If `enableMatter` is also on and Homebridge exposes its native Matter Plugin API (Homebridge 2.x+), the plugin additionally publishes those same four switches as separate Matter accessories, alongside the HomeKit ones above. Matter (as currently supported by Homebridge) has no device type for a TV/media-player, absolute volume or output selection, so the main Television/Speaker/InputSource accessory has no Matter counterpart and stays HomeKit-only. See [Matter support](#matter-support) below.
 
 It polls each server every 5 seconds by default for playback state, now-playing metadata and the list of outputs — except while playback is stopped, when the extra now-playing/outputs requests are skipped since there's nothing new to report. If the server was built with [WebSocket push notification support](https://owntone.github.io/owntone-server/json-api/#push-notifications), the plugin also subscribes to it and reacts to changes immediately instead of waiting for the next poll; the polling interval then backs off to an infrequent safety-net check (every 5 minutes) rather than stopping outright, since a WebSocket can stay open while actually dead. Servers without WebSocket support are unaffected — they just keep polling at the configured interval as before.
 
@@ -134,7 +136,8 @@ Above the form, each server gets a **Test Connection** button once its host is f
 | `password` | string | no | — | Optional password for reverse-proxy / basic auth |
 | `bearerToken` | string | no | — | Optional bearer token; takes precedence over basic auth |
 | `ignoreCertificateErrors` | boolean | no | `false` | Accept self-signed certificates (HTTPS only) |
-| `exposeTrackSwitches` | boolean | no | `false` | Expose next / previous / play-pause as HomeKit switches |
+| `exposeTrackSwitches` | boolean | no | `false` | Expose next / previous / play-pause / mute as HomeKit switches |
+| `enableMatter` | boolean | no | `false` | Also publish the switches above as native Matter accessories. Only takes effect together with `exposeTrackSwitches`. Requires Homebridge 2.x+; no effect on 1.x |
 
 Authentication is **not** required. OwnTone itself does not authenticate the JSON API on the local network; the username/password and bearer token options exist for setups where OwnTone sits behind a reverse proxy.
 
@@ -199,7 +202,7 @@ These are limitations of HomeKit and the Home app, not of OwnTone or this plugin
 - **`PowerModeSelection` (the "Settings" button) is acknowledged and ignored** — OwnTone has no settings screen to open.
 - **Shuffle, repeat and consume modes are not exposed.** OwnTone supports them, but HomeKit has no matching characteristic. Nothing is invented to work around this.
 
-If the Apple Remote mapping is not enough for your automations, enable `exposeTrackSwitches` to get plain HomeKit switches for next track, previous track and play/pause. Next track and previous track are momentary — they turn themselves back off after 500 ms, so they behave like buttons. Play/Pause is stateful instead: it reflects whether OwnTone is actually playing (on) or paused/stopped (off), updating on every poll, and setting it drives playback directly (`play()`/`pause()`) rather than toggling.
+If the Apple Remote mapping is not enough for your automations, enable `exposeTrackSwitches` to get plain HomeKit switches for next track, previous track, play/pause and mute. Next track and previous track are momentary — they turn themselves back off after 500 ms, so they behave like buttons. Play/Pause and Mute are stateful instead: they reflect whether OwnTone is actually playing (on) or paused/stopped (off), and whether it's muted, updating on every poll — setting Play/Pause drives playback directly (`play()`/`pause()`) rather than toggling, and setting Mute is equivalent to the Television speaker's `Mute` characteristic (both stay in sync with each other).
 
 ## Artwork / thumbnail limitation
 
@@ -214,7 +217,21 @@ Concretely:
 
 ## Matter support
 
-This plugin does not implement its own Matter bridge. It exposes standard Homebridge/HomeKit services. If your Homebridge version supports bridging compatible accessories to Matter, this plugin should benefit from that automatically where the underlying Homebridge and Apple Home ecosystems support it.
+Homebridge 2.x has a native Matter Plugin API (`api.matter`) that lets a plugin publish accessories directly to Matter, separately from the HomeKit ones above — it does not automatically bridge existing HomeKit services. Set `enableMatter` to opt in.
+
+Matter (as currently implemented by Homebridge) has no device type for a TV/media-player, absolute volume, or output selection — so the main Television/Speaker/InputSource accessory can't be represented in Matter at all and stays HomeKit-only, no matter what. What *does* map cleanly is simple on/off state, using Matter's `OnOffSwitch` device type — so `enableMatter` publishes a Matter accessory for each of the same four switches `exposeTrackSwitches` already added to HomeKit. It's additive, not a replacement: **`enableMatter` only takes effect when `exposeTrackSwitches` is also on**, since Matter accessories are only ever published for buttons you've already opted into having in HomeKit, never introduced as Matter-only extras.
+
+| Matter accessory | Behaviour |
+| --- | --- |
+| `<name> Mute` | Reflects and controls mute, same as the HomeKit Mute switch / Television speaker's `Mute` characteristic |
+| `<name> Play/Pause` | Reflects and controls playback, same as the HomeKit Play/Pause switch |
+| `<name> Next Track` / `<name> Previous Track` | Momentary — turns itself back off after 500 ms, same as the HomeKit switches |
+
+Requirements and limitations:
+
+- **Requires Homebridge 2.x.** On Homebridge 1.x, `enableMatter` logs a warning at startup and otherwise has no effect — there is nothing to fall back to, since the Matter Plugin API doesn't exist there.
+- **Registration happens once, at startup**, before the first poll resolves — so each Matter accessory briefly starts at "off" and is corrected to the real state within one poll cycle (or immediately, if push notifications are connected).
+- **No automatic cleanup.** If you later turn `enableMatter` or `exposeTrackSwitches` off, or remove a server from the config, its Matter accessories are not automatically unregistered. Remove them manually via Homebridge's Matter UI if this matters to you.
 
 ---
 
@@ -235,10 +252,10 @@ The plugin is built so that no OwnTone problem can take Homebridge down:
 
 | Level | Used for |
 | --- | --- |
-| `info` | Accessory published, server reachable/recovered, OwnTone version, poll-complete track summary (every poll), all push notification connect/disconnect/retry events |
-| `warn` | Server unreachable, command failure, unsupported feature, invalid config |
+| `info` | Accessory published, server reachable/recovered, OwnTone version, poll-complete track summary (every poll), all push notification connect/disconnect/retry events, Matter accessories published |
+| `warn` | Server unreachable, command failure, unsupported feature, invalid config, `enableMatter` on with no Matter Plugin API available |
 | `error` | Unexpected setup failures (still non-fatal) |
-| `debug` | Metadata changes, artwork caching, ignored remote keys, skipped polls, full stack trace alongside a push connection failure |
+| `debug` | Metadata changes, artwork caching, ignored remote keys, skipped polls, full stack trace alongside a push connection failure, Matter accessory state changes |
 
 Enable debug logging with `homebridge -D` or the **Debug Mode** toggle in the Homebridge UI.
 
@@ -311,6 +328,7 @@ src/
   platformAccessory.ts HomeKit services, characteristic mapping, polling loop
   owntoneClient.ts     Typed OwnTone JSON API client
   owntonePushClient.ts Optional WebSocket push-notification client (falls back to polling)
+  matterTypes.ts       Minimal local types for Homebridge's native Matter Plugin API
   errorThrottle.ts     Log-spam suppression
   types.ts             Config, raw API and normalised internal models
 ```

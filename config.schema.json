@@ -94,8 +94,15 @@
               "maximum": 1440
             },
             "exposeTrackSwitches": {
-              "title": "Expose Next/Previous/Play-Pause Switches",
-              "description": "Adds stateless switches for next track, previous track and play/pause. Useful for automations and when the Apple Remote mapping is not enough.",
+              "title": "Expose Next/Previous/Play-Pause/Mute Switches",
+              "description": "Adds switches for next track, previous track, play/pause and mute. Useful for automations and when the Apple Remote mapping is not enough.",
+              "type": "boolean",
+              "default": false,
+              "required": false
+            },
+            "enableMatter": {
+              "title": "Publish Matter Accessories",
+              "description": "Also publishes the Next/Previous/Play-Pause/Mute switches above as native Matter accessories, using Homebridge's Matter Plugin API (Homebridge 2.x or later). Only takes effect together with Expose Next/Previous/Play-Pause/Mute Switches. Matter has no equivalent of the main TV/Speaker/output-selection accessory, so those remain HomeKit-only. No effect on Homebridge 1.x.",
               "type": "boolean",
               "default": false,
               "required": false
@@ -177,6 +184,7 @@
             "servers[].enableWebSocket",
             { "key": "servers[].pushReconnectInterval", "type": "number" },
             "servers[].exposeTrackSwitches",
+            "servers[].enableMatter",
             "servers[].ignoreCertificateErrors",
             "servers[].username",
             "servers[].password",
