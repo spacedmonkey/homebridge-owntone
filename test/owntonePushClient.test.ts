@@ -69,7 +69,7 @@ describe('OwnTonePushClient — connecting', () => {
   it('opens a socket at the configured ws URL', () => {
     const { client, webSocketImpl } = createHarness({ protocol: 'wss', host: 'owntone.local', port: 3688 });
     client.connect();
-    expect(webSocketImpl).toHaveBeenCalledWith('wss://owntone.local:3688');
+    expect(webSocketImpl).toHaveBeenCalledWith('wss://owntone.local:3688', 'notify');
   });
 
   it('sends a notify subscription for the configured categories once open', () => {
@@ -390,6 +390,6 @@ describe('OwnTonePushClient — default transport resolution', () => {
     });
     client.connect();
 
-    expect(ctor).toHaveBeenCalledWith('ws://h:1');
+    expect(ctor).toHaveBeenCalledWith('ws://h:1', 'notify');
   });
 });

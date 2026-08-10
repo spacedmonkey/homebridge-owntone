@@ -22,7 +22,7 @@ export interface WebSocketLike {
   close(): void;
 }
 
-export type WebSocketCtor = new (url: string) => WebSocketLike;
+export type WebSocketCtor = new (url: string, protocols?: string | string[]) => WebSocketLike;
 
 export interface OwnTonePushClientOptions {
   protocol: 'ws' | 'wss';
@@ -91,7 +91,11 @@ export class OwnTonePushClient {
 
     let socket: WebSocketLike;
     try {
-      socket = new WebSocketImpl(url);
+      // OwnTone only starts sending events once the client negotiates the
+      // "notify" WebSocket subprotocol (Sec-WebSocket-Protocol) — without it
+      // the handshake still succeeds and the socket looks connected, but the
+      // server never pushes anything over it.
+      socket = new WebSocketImpl(url, 'notify');
     } catch (error) {
       this.handleDisconnect(error);
       return;
