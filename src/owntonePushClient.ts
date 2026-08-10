@@ -119,7 +119,8 @@ export class OwnTonePushClient {
       }
     };
 
-    socket.onmessage = () => {
+    socket.onmessage = (event) => {
+      this.options.log.debug('Push notification message received from %s: %s', url, describeMessage(event.data));
       this.options.onEvent();
     };
 
@@ -253,6 +254,12 @@ function defaultWebSocketCtor(): WebSocketCtor | undefined {
   } catch {
     return undefined;
   }
+}
+
+/** Best-effort, size-capped rendering of a raw WebSocket message payload for debug logging. */
+function describeMessage(data: unknown): string {
+  const text = typeof data === 'string' ? data : String(data);
+  return text.length > 200 ? `${text.slice(0, 200)}…` : text;
 }
 
 /**

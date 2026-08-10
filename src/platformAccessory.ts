@@ -658,6 +658,7 @@ export class OwnTonePlatformAccessory {
     try {
       const current = service.getCharacteristic(characteristic).value;
       if (current !== value) {
+        this.platform.log.debug('"%s": %s changed %s -> %s.', this.config.name, characteristic.name, current, value);
         service.updateCharacteristic(characteristic, value);
       }
     } catch (error) {
@@ -801,7 +802,10 @@ export class OwnTonePlatformAccessory {
       host: this.config.host,
       port: port as number,
       categories: ['player', 'volume', 'outputs', 'queue', 'options'],
-      onEvent: () => void this.poll(),
+      onEvent: () => {
+        this.platform.log.debug('"%s": push notification triggered a poll.', this.config.name);
+        void this.poll();
+      },
       onConnectionChange: (connected) => this.handlePushConnectionChange(connected),
       log: this.platform.log,
     });
