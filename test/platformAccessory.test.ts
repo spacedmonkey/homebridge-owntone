@@ -24,6 +24,7 @@ interface MockMatterApi {
   matter: MatterAPI;
   registered: MatterAccessoryDefinition[];
   registerPlatformAccessories: jest.Mock;
+  unregisterPlatformAccessories: jest.Mock;
   updateAccessoryState: jest.Mock;
 }
 
@@ -33,24 +34,38 @@ function createMockMatterApi(): MockMatterApi {
   const registerPlatformAccessories = jest.fn(async (_plugin: string, _platform: string, accessories: MatterAccessoryDefinition[]) => {
     registered.push(...accessories);
   });
+  const unregisterPlatformAccessories = jest.fn().mockResolvedValue(undefined);
   const updateAccessoryState = jest.fn().mockResolvedValue(undefined);
+  const getAccessoryState = jest.fn().mockResolvedValue({ onOff: false });
 
   const matter: MatterAPI = {
     uuid: { generate: (data: string) => `matter-uuid:${data}` },
     deviceTypes: { OnOffSwitch: 'OnOffSwitch' },
+    clusterNames: { OnOff: 'onOff' },
     registerPlatformAccessories,
+    unregisterPlatformAccessories,
     updateAccessoryState,
+    getAccessoryState,
   };
 
-  return { matter, registered, registerPlatformAccessories, updateAccessoryState };
+  return { matter, registered, registerPlatformAccessories, unregisterPlatformAccessories, updateAccessoryState };
 }
 
-function accessoryByDisplayName(registered: MatterAccessoryDefinition[], displayName: string): MatterAccessoryDefinition {
-  const accessory = registered.find((entry) => entry.displayName === displayName);
+/** The lone composed accessory this bridge publishes, once `registered` has an entry. */
+function matterAccessory(registered: MatterAccessoryDefinition[]): MatterAccessoryDefinition {
+  const accessory = registered[0];
   if (!accessory) {
-    throw new Error(`No registered Matter accessory named "${displayName}"; got: ${registered.map((a) => a.displayName).join(', ')}`);
+    throw new Error('No Matter accessory was registered');
   }
   return accessory;
+}
+
+function matterPart(registered: MatterAccessoryDefinition[], id: string) {
+  const found = matterAccessory(registered).parts?.find((part) => part.id === id);
+  if (!found) {
+    throw new Error(`No registered Matter part "${id}"; got: ${matterAccessory(registered).parts?.map((p) => p.id).join(', ')}`);
+  }
+  return found;
 }
 
 /** A `MockApi` with a `matter` property attached, simulating Homebridge 2.x. */
@@ -858,33 +873,27 @@ describe('OwnTonePlatformAccessory — Matter accessories', () => {
     handler.dispose();
   });
 
-  it('registers Mute, Play/Pause, Next and Previous when exposeTrackSwitches is also on', async () => {
+  it('registers one composed accessory with Mute, Play/Pause, Next and Previous parts when exposeTrackSwitches is also on', async () => {
     const { matter, registered } = createMockMatterApi();
     const { handler } = await build({ enableMatter: true, exposeTrackSwitches: true }, undefined, undefined, apiWithMatter(matter));
 
-    expect(registered.map((accessory) => accessory.displayName).sort()).toEqual([
-      'Living Room Music Mute',
-      'Living Room Music Next Track',
-      'Living Room Music Play/Pause',
-      'Living Room Music Previous Track',
-    ]);
+    expect(registered).toHaveLength(1);
+    expect(registered[0].displayName).toBe('Living Room Music Controls');
+    expect(registered[0].parts?.map((part) => part.id).sort()).toEqual(['mute', 'next', 'playpause', 'previous']);
     handler.dispose();
   });
 
-  it('seeds each accessory at "off" (registration happens before the first poll resolves) with required identity fields', async () => {
+  it('seeds Mute/Play-Pause parts at "off" (registration happens before the first poll resolves) with required identity fields', async () => {
     const client = createFakeClient();
     client.getStatus.mockResolvedValue(playing({ state: 'pause', volume: 0 }));
     const { matter, registered } = createMockMatterApi();
     const { handler } = await build({ enableMatter: true, exposeTrackSwitches: true }, client, undefined, apiWithMatter(matter));
 
-    const mute = accessoryByDisplayName(registered, 'Living Room Music Mute');
-    expect(mute.clusters?.onOff).toEqual({ onOff: false });
-    expect(mute.manufacturer).toBe('OwnTone');
-    expect(mute.UUID).toBeTruthy();
-    expect(mute.serialNumber).toBeTruthy();
-
-    const playPause = accessoryByDisplayName(registered, 'Living Room Music Play/Pause');
-    expect(playPause.clusters?.onOff).toEqual({ onOff: false });
+    expect(matterPart(registered, 'mute').clusters?.onOff).toEqual({ onOff: false });
+    expect(matterPart(registered, 'playpause').clusters?.onOff).toEqual({ onOff: false });
+    expect(matterAccessory(registered).manufacturer).toBe('OwnTone');
+    expect(matterAccessory(registered).UUID).toBeTruthy();
+    expect(matterAccessory(registered).serialNumber).toBeTruthy();
 
     handler.dispose();
   });
@@ -896,11 +905,9 @@ describe('OwnTonePlatformAccessory — Matter accessories', () => {
     const { matter, registered, updateAccessoryState } = createMockMatterApi();
     const { handler } = await build({ enableMatter: true, exposeTrackSwitches: true }, client, undefined, apiWithMatter(matter));
 
-    const mute = accessoryByDisplayName(registered, 'Living Room Music Mute');
-    expect(updateAccessoryState).toHaveBeenCalledWith(mute.UUID, 'onOff', { onOff: true });
-
-    const playPause = accessoryByDisplayName(registered, 'Living Room Music Play/Pause');
-    expect(updateAccessoryState).toHaveBeenCalledWith(playPause.UUID, 'onOff', { onOff: true });
+    const uuid = matterAccessory(registered).UUID;
+    expect(updateAccessoryState).toHaveBeenCalledWith(uuid, 'onOff', { onOff: true }, 'mute');
+    expect(updateAccessoryState).toHaveBeenCalledWith(uuid, 'onOff', { onOff: true }, 'playpause');
 
     handler.dispose();
   });
@@ -910,11 +917,10 @@ describe('OwnTonePlatformAccessory — Matter accessories', () => {
     const { matter, registered } = createMockMatterApi();
     const { handler } = await build({ enableMatter: true, exposeTrackSwitches: true }, client, undefined, apiWithMatter(matter));
 
-    const mute = accessoryByDisplayName(registered, 'Living Room Music Mute');
-    await mute.handlers?.onOff?.on?.();
+    await matterPart(registered, 'mute').handlers?.onOff?.on?.();
     expect(client.setMute).toHaveBeenCalledWith(true);
 
-    await mute.handlers?.onOff?.off?.();
+    await matterPart(registered, 'mute').handlers?.onOff?.off?.();
     expect(client.setMute).toHaveBeenCalledWith(false);
 
     handler.dispose();
@@ -925,11 +931,10 @@ describe('OwnTonePlatformAccessory — Matter accessories', () => {
     const { matter, registered } = createMockMatterApi();
     const { handler } = await build({ enableMatter: true, exposeTrackSwitches: true }, client, undefined, apiWithMatter(matter));
 
-    const playPause = accessoryByDisplayName(registered, 'Living Room Music Play/Pause');
-    await playPause.handlers?.onOff?.off?.();
+    await matterPart(registered, 'playpause').handlers?.onOff?.off?.();
     expect(client.pause).toHaveBeenCalled();
 
-    await playPause.handlers?.onOff?.on?.();
+    await matterPart(registered, 'playpause').handlers?.onOff?.on?.();
     expect(client.play).toHaveBeenCalled();
 
     handler.dispose();
@@ -940,13 +945,24 @@ describe('OwnTonePlatformAccessory — Matter accessories', () => {
     const { matter, registered, updateAccessoryState } = createMockMatterApi();
     const { handler } = await build({ enableMatter: true, exposeTrackSwitches: true }, client, undefined, apiWithMatter(matter));
 
-    const next = accessoryByDisplayName(registered, 'Living Room Music Next Track');
-    await next.handlers?.onOff?.on?.();
+    const uuid = matterAccessory(registered).UUID;
+    await matterPart(registered, 'next').handlers?.onOff?.on?.();
     expect(client.next).toHaveBeenCalled();
-    expect(updateAccessoryState).not.toHaveBeenCalledWith(next.UUID, 'onOff', { onOff: false });
+    expect(updateAccessoryState).not.toHaveBeenCalledWith(uuid, 'onOff', { onOff: false }, 'next');
 
     await jest.advanceTimersByTimeAsync(600);
-    expect(updateAccessoryState).toHaveBeenCalledWith(next.UUID, 'onOff', { onOff: false });
+    expect(updateAccessoryState).toHaveBeenCalledWith(uuid, 'onOff', { onOff: false }, 'next');
+
+    handler.dispose();
+  });
+
+  it('get handlers return the last-known cached state', async () => {
+    const client = createFakeClient();
+    client.getStatus.mockResolvedValue(playing({ volume: 0 }));
+    const { matter, registered } = createMockMatterApi();
+    const { handler } = await build({ enableMatter: true, exposeTrackSwitches: true }, client, undefined, apiWithMatter(matter));
+
+    expect(await matterPart(registered, 'mute').handlers?.onOff?.get?.()).toEqual({ onOff: true });
 
     handler.dispose();
   });
@@ -965,9 +981,23 @@ describe('OwnTonePlatformAccessory — Matter accessories', () => {
 
     client.getStatus.mockResolvedValue(playing({ state: 'pause' }));
     await jest.advanceTimersByTimeAsync(POLL_MS);
-    expect(updateAccessoryState).toHaveBeenCalledWith(expect.stringContaining('playpause'), 'onOff', { onOff: false });
+    expect(updateAccessoryState).toHaveBeenCalledWith(expect.anything(), 'onOff', { onOff: false }, 'playpause');
 
     handler.dispose();
+  });
+
+  it('unregisters the Matter accessory when the handler is disposed', async () => {
+    const client = createFakeClient();
+    const { matter, unregisterPlatformAccessories, registered } = createMockMatterApi();
+    const { handler } = await build({ enableMatter: true, exposeTrackSwitches: true }, client, undefined, apiWithMatter(matter));
+
+    const uuid = matterAccessory(registered).UUID;
+    unregisterPlatformAccessories.mockClear();
+
+    handler.dispose();
+    await flush();
+
+    expect(unregisterPlatformAccessories).toHaveBeenCalledWith('homebridge-owntone', 'OwnTone', [{ UUID: uuid }]);
   });
 });
 

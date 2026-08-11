@@ -143,13 +143,14 @@ export class OwnTonePlatformAccessory {
     this.pollLoop.start();
   }
 
-  /** Stop all timers. Called by the platform on Homebridge shutdown. */
+  /** Stop all timers and unregister any published Matter accessory. Called by the platform on Homebridge shutdown. */
   dispose(): void {
     this.pollLoop.dispose();
     for (const timer of this.switchTimers) {
       clearTimeout(timer);
     }
     this.switchTimers.clear();
+    void this.matterBridge.dispose();
   }
 
   /** Latest cached artwork metadata, if any. Exposed for logging and tests. */

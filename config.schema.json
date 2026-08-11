@@ -102,7 +102,7 @@
             },
             "enableMatter": {
               "title": "Publish Matter Accessories",
-              "description": "Also publishes the Next/Previous/Play-Pause/Mute switches above as native Matter accessories, using Homebridge's Matter Plugin API (Homebridge 2.x or later). Only takes effect together with Expose Next/Previous/Play-Pause/Mute Switches. Matter has no equivalent of the main TV/Speaker/output-selection accessory, so those remain HomeKit-only. No effect on Homebridge 1.x.",
+              "description": "Also publishes the Next/Previous/Play-Pause/Mute switches above as sub-controls of one native Matter accessory, using Homebridge's Matter Plugin API (Homebridge 2.x or later). Only takes effect together with Expose Next/Previous/Play-Pause/Mute Switches. Matter has no equivalent of the main TV/Speaker/output-selection accessory, so those remain HomeKit-only. No effect on Homebridge 1.x.",
               "type": "boolean",
               "default": false,
               "required": false

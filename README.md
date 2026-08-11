@@ -219,19 +219,19 @@ Concretely:
 
 Homebridge 2.x has a native Matter Plugin API (`api.matter`) that lets a plugin publish accessories directly to Matter, separately from the HomeKit ones above — it does not automatically bridge existing HomeKit services. Set `enableMatter` to opt in.
 
-Matter (as currently implemented by Homebridge) has no device type for a TV/media-player, absolute volume, or output selection — so the main Television/Speaker/InputSource accessory can't be represented in Matter at all and stays HomeKit-only, no matter what. What *does* map cleanly is simple on/off state, using Matter's `OnOffSwitch` device type — so `enableMatter` publishes a Matter accessory for each of the same four switches `exposeTrackSwitches` already added to HomeKit. It's additive, not a replacement: **`enableMatter` only takes effect when `exposeTrackSwitches` is also on**, since Matter accessories are only ever published for buttons you've already opted into having in HomeKit, never introduced as Matter-only extras.
+Matter (as currently implemented by Homebridge) has no device type for a TV/media-player, absolute volume, or output selection — so the main Television/Speaker/InputSource accessory can't be represented in Matter at all and stays HomeKit-only, no matter what. What *does* map cleanly is simple on/off state, using Matter's `OnOffSwitch` device type — so `enableMatter` publishes one composed Matter accessory, `<name> Controls`, with a sub-control for each of the same four switches `exposeTrackSwitches` already added to HomeKit — one combinable/splittable tile in Apple Home instead of four separate ones. It's additive, not a replacement: **`enableMatter` only takes effect when `exposeTrackSwitches` is also on**, since Matter accessories are only ever published for buttons you've already opted into having in HomeKit, never introduced as Matter-only extras.
 
-| Matter accessory | Behaviour |
+| Sub-control | Behaviour |
 | --- | --- |
-| `<name> Mute` | Reflects and controls mute, same as the HomeKit Mute switch / Television speaker's `Mute` characteristic |
-| `<name> Play/Pause` | Reflects and controls playback, same as the HomeKit Play/Pause switch |
-| `<name> Next Track` / `<name> Previous Track` | Momentary — turns itself back off after 500 ms, same as the HomeKit switches |
+| `Mute` | Reflects and controls mute, same as the HomeKit Mute switch / Television speaker's `Mute` characteristic |
+| `Play/Pause` | Reflects and controls playback, same as the HomeKit Play/Pause switch |
+| `Next Track` / `Previous Track` | Momentary — turns itself back off after 500 ms, same as the HomeKit switches |
 
-Requirements and limitations:
+Requirements and behaviour:
 
 - **Requires Homebridge 2.x.** On Homebridge 1.x, `enableMatter` logs a warning at startup and otherwise has no effect — there is nothing to fall back to, since the Matter Plugin API doesn't exist there.
-- **Registration happens once, at startup**, before the first poll resolves — so each Matter accessory briefly starts at "off" and is corrected to the real state within one poll cycle (or immediately, if push notifications are connected).
-- **No automatic cleanup.** If you later turn `enableMatter` or `exposeTrackSwitches` off, or remove a server from the config, its Matter accessories are not automatically unregistered. Remove them manually via Homebridge's Matter UI if this matters to you.
+- **Registration happens once, at startup**, before the first poll resolves — so each sub-control briefly starts at "off" and is corrected to the real state within one poll cycle (or immediately, if push notifications are connected). A Matter controller reading a sub-control before then gets the same cached "off" back; state pushed from later polls is what corrects it.
+- **Cleanup is automatic.** Turning `enableMatter` or `exposeTrackSwitches` off, removing a server from the config, or shutting Homebridge down unregisters the accessory it published. Upgrading from an older version of this plugin that published four separate accessories also unregisters those automatically the first time it starts back up.
 
 ---
 
@@ -252,10 +252,10 @@ The plugin is built so that no OwnTone problem can take Homebridge down:
 
 | Level | Used for |
 | --- | --- |
-| `info` | Accessory published, server reachable/recovered, OwnTone version, poll-complete track summary (every poll), all push notification connect/disconnect/retry events, Matter accessories published |
-| `warn` | Server unreachable, command failure, unsupported feature, invalid config, `enableMatter` on with no Matter Plugin API available |
+| `info` | Accessory published, server reachable/recovered, OwnTone version, poll-complete track summary (every poll), all push notification connect/disconnect/retry events, Matter accessory published |
+| `warn` | Server unreachable, command failure, unsupported feature, invalid config, `enableMatter` on with no Matter Plugin API available, Matter publish/update failures (with an actionable hint when Homebridge reports a specific cause, e.g. an uncommissioned bridge) |
 | `error` | Unexpected setup failures (still non-fatal) |
-| `debug` | Metadata changes, artwork caching, ignored remote keys, skipped polls, full stack trace alongside a push connection failure, Matter accessory state changes |
+| `debug` | Metadata changes, artwork caching, ignored remote keys, skipped polls, full stack trace alongside a push connection failure, Matter accessory state changes, Matter bridge commissioning status, Matter accessory cleanup |
 
 Enable debug logging with `homebridge -D` or the **Debug Mode** toggle in the Homebridge UI.
 
