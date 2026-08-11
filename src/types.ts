@@ -212,3 +212,9 @@ export interface ArtworkSnapshot {
   contentType?: string;
   byteLength?: number;
 }
+
+/** A hand-guessed subset of `api.hap`'s runtime surface, not derivable from this plugin's `homebridge` 1.x type dependency. */
+export interface HapCompatSurface {
+  HapStatusError?: new (status: number) => Error;
+  HAPStatus?: Record<string, number>;
+}

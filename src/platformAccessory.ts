@@ -7,30 +7,16 @@ import type {
 } from 'homebridge';
 
 import { ErrorThrottle } from './errorThrottle';
-import type { MatterAccessoryDefinition, MatterAPI } from './matterTypes';
-import { matterApiOf } from './matterTypes';
+import { MatterAccessoryBridge } from './matterAccessoryBridge';
 import { OwnToneClient, UnsupportedFeatureError } from './owntoneClient';
 import type { OwnTonePushClientOptions } from './owntonePushClient';
 import { OwnTonePushClient } from './owntonePushClient';
 import type { OwnTonePlatform } from './platform';
 import { serverIdentity } from './platform';
-import {
-  DEFAULT_VOLUME_STEP,
-  FAILURE_THRESHOLD,
-  PLATFORM_NAME,
-  PLUGIN_NAME,
-  SEEK_STEP_MS,
-  SWITCH_RESET_DELAY,
-  WEBSOCKET_RECONCILE_INTERVAL_MS,
-} from './settings';
-import type {
-  ArtworkSnapshot,
-  OutputSnapshot,
-  OwnToneConfigResponse,
-  PlayerSnapshot,
-  ResolvedServerConfig,
-  TrackSnapshot,
-} from './types';
+import { PollLoop } from './pollLoop';
+import { DEFAULT_VOLUME_STEP, FAILURE_THRESHOLD, SEEK_STEP_MS, SWITCH_RESET_DELAY } from './settings';
+import type { ArtworkSnapshot, HapCompatSurface, OutputSnapshot, PlayerSnapshot, ResolvedServerConfig, TrackSnapshot } from './types';
+import { describeError } from './util';
 
 /** Identifier of the always-present "OwnTone" input source. */
 const DEFAULT_INPUT_IDENTIFIER = 1;
@@ -69,6 +55,15 @@ interface InputSourceEntry {
  * - `TelevisionSpeaker` for volume and (emulated) mute,
  * - one `InputSource` per OwnTone output,
  * - optionally `Switch` services for next/previous/play-pause/mute.
+ *
+ * Two pieces of state and behaviour are deliberately owned by collaborators
+ * rather than this class directly, each constructed in the constructor body
+ * and handed just the callbacks/state they need: {@link PollLoop} (timers,
+ * in-flight poll de-duplication, the push-notification WebSocket) and
+ * {@link MatterAccessoryBridge} (the opt-in Matter-native mirrors of the
+ * HomeKit Switch services). Everything that still touches the HAP `Service`
+ * objects built below — HomeKit handlers, poll-result handling, artwork —
+ * stays here.
  */
 export class OwnTonePlatformAccessory {
   private readonly televisionService: Service;
@@ -79,21 +74,15 @@ export class OwnTonePlatformAccessory {
   private readonly switchTimers = new Set<NodeJS.Timeout>();
   private readonly throttle = new ErrorThrottle();
 
-  private pollTimer?: NodeJS.Timeout;
-  private polling = false;
-  private disposed = false;
-  private consecutiveFailures = 0;
-  private pushClient?: OwnTonePushClient;
-  private wsConnected = false;
-  private pushRefreshTimer?: NodeJS.Timeout;
-
-  private matterApi?: MatterAPI;
-  private matterMuteUuid?: string;
-  private matterMutedState?: boolean;
-  private matterPlayPauseUuid?: string;
-  private matterPlayingState?: boolean;
+  private readonly matterBridge: MatterAccessoryBridge;
+  private readonly pollLoop: PollLoop;
 
   private reachable = false;
+  // Kept here rather than on PollLoop: it exists purely to decide when
+  // onPollSuccess/onPollFailure below flip `reachable`, so it belongs with
+  // the reachability state it drives, not with PollLoop's timer/transport
+  // bookkeeping.
+  private consecutiveFailures = 0;
   private player?: PlayerSnapshot;
   private track?: TrackSnapshot;
   private outputs: OutputSnapshot[] = [];
@@ -110,6 +99,27 @@ export class OwnTonePlatformAccessory {
     private readonly pushClientFactory: (options: OwnTonePushClientOptions) => OwnTonePushClient = (options) =>
       new OwnTonePushClient(options),
   ) {
+    this.pollLoop = new PollLoop({
+      config: this.config,
+      client: this.client,
+      log: this.platform.log,
+      throttle: this.throttle,
+      pushClientFactory: this.pushClientFactory,
+      onSuccess: (player, track, outputs) => this.onPollSuccess(player, track, outputs),
+      onFailure: (error) => this.onPollFailure(error),
+    });
+
+    this.matterBridge = new MatterAccessoryBridge({
+      platform: this.platform,
+      config: this.config,
+      client: this.client,
+      serialNumber: () => this.serialNumber(),
+      runCommand: (label, action, throwOnFailure) => this.runCommand(label, action, throwOnFailure),
+      poll: () => this.pollLoop.poll(),
+      handleMuteSet: (value) => this.handleMuteSet(value),
+      scheduleMomentaryReset: (reset) => this.scheduleMomentaryReset(reset),
+    });
+
     this.configureAccessoryInformation();
     this.televisionService = this.configureTelevisionService();
     this.speakerService = this.configureSpeakerService();
@@ -128,27 +138,18 @@ export class OwnTonePlatformAccessory {
       this.configureTrackSwitches();
     }
 
-    void this.configureMatter();
+    void this.matterBridge.configure();
     void this.loadFirmwareRevision();
-    this.startPolling();
+    this.pollLoop.start();
   }
 
   /** Stop all timers. Called by the platform on Homebridge shutdown. */
   dispose(): void {
-    this.disposed = true;
-    if (this.pollTimer) {
-      clearInterval(this.pollTimer);
-      this.pollTimer = undefined;
-    }
-    if (this.pushRefreshTimer) {
-      clearInterval(this.pushRefreshTimer);
-      this.pushRefreshTimer = undefined;
-    }
+    this.pollLoop.dispose();
     for (const timer of this.switchTimers) {
       clearTimeout(timer);
     }
     this.switchTimers.clear();
-    this.pushClient?.dispose();
   }
 
   /** Latest cached artwork metadata, if any. Exposed for logging and tests. */
@@ -168,7 +169,7 @@ export class OwnTonePlatformAccessory {
 
   /** `true` while the push-notification WebSocket is connected. Always `false` if the server doesn't support it or `enableWebSocket` is off. */
   get isPushConnected(): boolean {
-    return this.wsConnected;
+    return this.pollLoop.isConnected;
   }
 
   /* -------------------------------------------------------------------- *
@@ -338,11 +339,9 @@ export class OwnTonePlatformAccessory {
    * behaviour as `handleActiveSet` below.
    */
   private configurePlayPauseSwitch(): void {
-    const { Service, Characteristic } = this.platform;
+    const { Characteristic } = this.platform;
     const displayName = `${this.config.name} Play/Pause`;
-    const service =
-      this.accessory.getServiceById(Service.Switch, 'owntone-playpause') ??
-      this.accessory.addService(Service.Switch, displayName, 'owntone-playpause');
+    const service = this.getOrAddSwitchService('owntone-playpause', displayName);
 
     this.setIfSupported(service, 'ConfiguredName', displayName);
     this.playPauseSwitchService = service;
@@ -353,7 +352,7 @@ export class OwnTonePlatformAccessory {
       .onSet(async (value) => {
         const shouldPlay = value === true;
         await this.runCommand(shouldPlay ? 'play' : 'pause', () => (shouldPlay ? this.client.play() : this.client.pause()), true);
-        void this.poll();
+        void this.pollLoop.poll();
       });
   }
 
@@ -365,10 +364,9 @@ export class OwnTonePlatformAccessory {
    * momentary like Next/Previous — see {@link handleMuteSet}.
    */
   private configureMuteSwitch(): void {
-    const { Service, Characteristic } = this.platform;
+    const { Characteristic } = this.platform;
     const displayName = `${this.config.name} Mute`;
-    const service =
-      this.accessory.getServiceById(Service.Switch, 'owntone-mute') ?? this.accessory.addService(Service.Switch, displayName, 'owntone-mute');
+    const service = this.getOrAddSwitchService('owntone-mute', displayName);
 
     this.setIfSupported(service, 'ConfiguredName', displayName);
     this.muteSwitchService = service;
@@ -382,10 +380,9 @@ export class OwnTonePlatformAccessory {
   }
 
   private addTrackSwitch(subtype: string, name: string, action: () => Promise<void>): void {
-    const { Service, Characteristic } = this.platform;
+    const { Characteristic } = this.platform;
     const displayName = `${this.config.name} ${name}`;
-    const service =
-      this.accessory.getServiceById(Service.Switch, subtype) ?? this.accessory.addService(Service.Switch, displayName, subtype);
+    const service = this.getOrAddSwitchService(subtype, displayName);
 
     this.setIfSupported(service, 'ConfiguredName', displayName);
 
@@ -399,161 +396,24 @@ export class OwnTonePlatformAccessory {
 
         // Reset back to "off" regardless of the outcome so the switch behaves
         // statelessly in the Home app.
-        const timer = setTimeout(() => {
-          this.switchTimers.delete(timer);
-          service.updateCharacteristic(Characteristic.On, false);
-        }, SWITCH_RESET_DELAY);
-        this.switchTimers.add(timer);
+        this.scheduleMomentaryReset(() => service.updateCharacteristic(Characteristic.On, false));
 
         await this.runCommand(name, action);
       });
   }
 
-  /* -------------------------------------------------------------------- *
-   * Matter
-   * -------------------------------------------------------------------- */
-
-  /**
-   * Publishes Mute, Play/Pause, Next and Previous as native Matter
-   * accessories via Homebridge's Matter Plugin API (`api.matter`,
-   * Homebridge 2.x+) — mirroring the same opt-in HomeKit switches from
-   * {@link configureTrackSwitches}, one-for-one. There is no Matter device
-   * type for a TV/media-player, absolute volume or output selection, so the
-   * primary Television/Speaker/InputSource accessory has no Matter
-   * counterpart at all and stays HomeKit-only.
-   *
-   * A no-op unless `exposeTrackSwitches` is also on — Matter accessories are
-   * only ever published for buttons the user has already opted into having
-   * in HomeKit, never introduced as Matter-only extras. Also a no-op on
-   * Homebridge 1.x, where `api.matter` does not exist — logged once so the
-   * user knows `enableMatter` had no effect rather than silently doing
-   * nothing.
-   */
-  private async configureMatter(): Promise<void> {
-    if (!this.config.enableMatter || !this.config.exposeTrackSwitches) {
-      return;
-    }
-
-    const matter = matterApiOf(this.platform.api);
-    if (!matter) {
-      this.platform.log.warn(
-        '"%s": Matter support was requested but this Homebridge version has no Matter Plugin API (Homebridge 2.x is required); ignoring.',
-        this.config.name,
-      );
-      return;
-    }
-
-    const identity = serverIdentity(this.config);
-    const deviceType = matter.deviceTypes.OnOffSwitch;
-    const accessories: MatterAccessoryDefinition[] = [];
-
-    // Registration happens synchronously in the constructor, before the
-    // first poll has ever resolved, so there is no real state to seed with
-    // yet — both accessories start at `false` and get corrected by
-    // `pushStateToMatter()` as soon as the first poll (or push event)
-    // reports the real state, same as HomeKit briefly showing defaults
-    // before its first characteristic read.
-    this.matterMuteUuid = matter.uuid.generate(`${identity}:matter:mute`);
-    this.matterMutedState = false;
-    accessories.push({
-      UUID: this.matterMuteUuid,
-      displayName: `${this.config.name} Mute`,
-      deviceType,
-      serialNumber: `${this.serialNumber()}-mute`,
-      manufacturer: 'OwnTone',
-      model: 'OwnTone Mute',
-      clusters: { onOff: { onOff: this.matterMutedState } },
-      handlers: {
-        onOff: {
-          on: () => this.handleMuteSet(true),
-          off: () => this.handleMuteSet(false),
-        },
-      },
-    });
-
-    this.matterPlayPauseUuid = matter.uuid.generate(`${identity}:matter:playpause`);
-    this.matterPlayingState = false;
-    accessories.push({
-      UUID: this.matterPlayPauseUuid,
-      displayName: `${this.config.name} Play/Pause`,
-      deviceType,
-      serialNumber: `${this.serialNumber()}-playpause`,
-      manufacturer: 'OwnTone',
-      model: 'OwnTone Play/Pause',
-      clusters: { onOff: { onOff: this.matterPlayingState } },
-      handlers: {
-        onOff: {
-          on: async () => {
-            await this.runCommand('play', () => this.client.play(), true);
-            void this.poll();
-          },
-          off: async () => {
-            await this.runCommand('pause', () => this.client.pause(), true);
-            void this.poll();
-          },
-        },
-      },
-    });
-
-    accessories.push(this.momentaryMatterAccessory(matter, identity, 'next', 'Next Track', () => this.client.next()));
-    accessories.push(this.momentaryMatterAccessory(matter, identity, 'previous', 'Previous Track', () => this.client.previous()));
-
-    try {
-      await matter.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, accessories);
-      this.matterApi = matter;
-      this.platform.log.info(
-        '"%s": published %d Matter accessor%s (%s).',
-        this.config.name,
-        accessories.length,
-        accessories.length === 1 ? 'y' : 'ies',
-        accessories.map((accessory) => accessory.displayName).join(', '),
-      );
-    } catch (error) {
-      this.platform.log.warn('"%s": could not publish Matter accessories: %s', this.config.name, describeError(error));
-    }
+  private getOrAddSwitchService(subtype: string, displayName: string): Service {
+    const { Service } = this.platform;
+    return this.accessory.getServiceById(Service.Switch, subtype) ?? this.accessory.addService(Service.Switch, displayName, subtype);
   }
 
-  /**
-   * Builds a Matter accessory for a momentary action (Next/Previous track):
-   * turning it on runs the action then auto-resets back to off after
-   * `SWITCH_RESET_DELAY`, the same "tap to trigger" pattern the HomeKit
-   * version of these switches uses in {@link addTrackSwitch} — Matter's
-   * `GenericSwitch` device type exists for physical momentary switches but
-   * isn't user-tappable in Apple Home, so `OnOffSwitch` is used here too.
-   */
-  private momentaryMatterAccessory(
-    matter: MatterAPI,
-    identity: string,
-    subtype: string,
-    name: string,
-    action: () => Promise<void>,
-  ): MatterAccessoryDefinition {
-    const uuid = matter.uuid.generate(`${identity}:matter:${subtype}`);
-
-    return {
-      UUID: uuid,
-      displayName: `${this.config.name} ${name}`,
-      deviceType: matter.deviceTypes.OnOffSwitch,
-      serialNumber: `${this.serialNumber()}-${subtype}`,
-      manufacturer: 'OwnTone',
-      model: `OwnTone ${name}`,
-      clusters: { onOff: { onOff: false } },
-      handlers: {
-        onOff: {
-          on: async () => {
-            const timer = setTimeout(() => {
-              this.switchTimers.delete(timer);
-              void this.matterApi
-                ?.updateAccessoryState(uuid, 'onOff', { onOff: false })
-                .catch((error) => this.platform.log.debug('"%s": could not reset Matter %s switch: %s', this.config.name, name, describeError(error)));
-            }, SWITCH_RESET_DELAY);
-            this.switchTimers.add(timer);
-
-            await this.runCommand(name, action);
-          },
-        },
-      },
-    };
+  /** Schedules `reset` to run after `SWITCH_RESET_DELAY`, tracked in `switchTimers` for cleanup on {@link dispose}. */
+  private scheduleMomentaryReset(reset: () => void): void {
+    const timer = setTimeout(() => {
+      this.switchTimers.delete(timer);
+      reset();
+    }, SWITCH_RESET_DELAY);
+    this.switchTimers.add(timer);
   }
 
   /* -------------------------------------------------------------------- *
@@ -576,7 +436,7 @@ export class OwnTonePlatformAccessory {
   private async handleActiveSet(value: CharacteristicValue): Promise<void> {
     const shouldPlay = value === this.platform.Characteristic.Active.ACTIVE;
     await this.runCommand(shouldPlay ? 'play' : 'pause', () => (shouldPlay ? this.client.play() : this.client.pause()), true);
-    void this.poll();
+    void this.pollLoop.poll();
   }
 
   private async handleActiveIdentifierSet(value: CharacteristicValue): Promise<void> {
@@ -593,7 +453,7 @@ export class OwnTonePlatformAccessory {
     const outputId = entry.outputId;
     await this.runCommand(`select output ${outputId}`, () => this.client.selectOutputsExclusively([outputId]), true);
     this.activeIdentifier = identifier;
-    void this.poll();
+    void this.pollLoop.poll();
   }
 
   private async handleRemoteKey(value: CharacteristicValue): Promise<void> {
@@ -630,7 +490,7 @@ export class OwnTonePlatformAccessory {
     }
 
     await this.runCommand(action.label, action.run, true);
-    void this.poll();
+    void this.pollLoop.poll();
   }
 
   private async handleVolumeSelector(volumeSelector: CharacteristicCtor, value: CharacteristicValue): Promise<void> {
@@ -640,7 +500,7 @@ export class OwnTonePlatformAccessory {
       () => (increment ? this.client.volumeUp(DEFAULT_VOLUME_STEP) : this.client.volumeDown(DEFAULT_VOLUME_STEP)),
       true,
     );
-    void this.poll();
+    void this.pollLoop.poll();
   }
 
   private async handleVolumeSet(value: CharacteristicValue): Promise<void> {
@@ -651,7 +511,7 @@ export class OwnTonePlatformAccessory {
   private async handleMuteSet(value: CharacteristicValue): Promise<void> {
     const muted = value === true;
     await this.runCommand(muted ? 'mute' : 'unmute', () => this.client.setMute(muted), true);
-    void this.poll();
+    void this.pollLoop.poll();
   }
 
   /**
@@ -678,10 +538,7 @@ export class OwnTonePlatformAccessory {
   }
 
   private throwCommunicationFailure(): never {
-    const hap = this.platform.api.hap as unknown as {
-      HapStatusError?: new (status: number) => Error;
-      HAPStatus?: Record<string, number>;
-    };
+    const hap = this.platform.api.hap as unknown as HapCompatSurface;
 
     const status = hap.HAPStatus?.SERVICE_COMMUNICATION_FAILURE ?? -70402;
     if (hap.HapStatusError) {
@@ -691,84 +548,10 @@ export class OwnTonePlatformAccessory {
   }
 
   /* -------------------------------------------------------------------- *
-   * Polling
+   * Poll results — the timer/transport mechanics live in PollLoop; this is
+   * what happens to a result once PollLoop hands one back via onSuccess/
+   * onFailure.
    * -------------------------------------------------------------------- */
-
-  private startPolling(): void {
-    void this.poll();
-    this.restartPollTimer();
-  }
-
-  /**
-   * (Re)creates the poll timer at whichever cadence currently applies.
-   * While the push-notification WebSocket is connected, that's just an
-   * infrequent reconciliation safety net (`WEBSOCKET_RECONCILE_INTERVAL_MS`)
-   * since state changes arrive via `onEvent` instead; otherwise it's the
-   * configured `pollingInterval`, same as before push support existed.
-   * Called on startup and whenever the WebSocket connects/disconnects.
-   */
-  private restartPollTimer(): void {
-    if (this.disposed) {
-      return;
-    }
-
-    if (this.pollTimer) {
-      clearInterval(this.pollTimer);
-    }
-
-    const intervalMs = this.wsConnected ? WEBSOCKET_RECONCILE_INTERVAL_MS : this.config.pollingInterval * 1000;
-    this.pollTimer = setInterval(() => void this.poll(), intervalMs);
-    if (typeof this.pollTimer.unref === 'function') {
-      this.pollTimer.unref();
-    }
-  }
-
-  private async poll(): Promise<void> {
-    if (this.disposed) {
-      return;
-    }
-    if (this.polling) {
-      this.platform.log.debug('"%s": previous poll still running, skipping this cycle.', this.config.name);
-      return;
-    }
-
-    this.polling = true;
-    this.platform.log.debug('"%s": polling %s.', this.config.name, this.client.description);
-    try {
-      const player = await this.client.getStatus();
-
-      let track: TrackSnapshot | undefined;
-      let outputs: OutputSnapshot[] | undefined;
-
-      // Stopped means nothing is playing and there's nothing new to say
-      // about which output is in use, so skip both extra requests — one
-      // round trip to OwnTone instead of three, every poll.
-      if (player.state !== 'stop') {
-        try {
-          track = await this.client.getNowPlaying();
-        } catch (error) {
-          // Metadata is optional — a failure here must not mark the whole
-          // server unreachable.
-          this.throttle.log('nowplaying', (message) => this.platform.log.debug(message), `"${this.config.name}": could not read now-playing metadata: ${describeError(error)}`);
-        }
-
-        // Refreshed every poll, same cadence as player/track state, so the
-        // active HomeKit input tracks the currently-selected output even when
-        // it's changed outside Homebridge (e.g. from the OwnTone web UI).
-        try {
-          outputs = await this.client.getOutputs();
-        } catch (error) {
-          this.throttle.log('outputs', (message) => this.platform.log.debug(message), `"${this.config.name}": could not read outputs: ${describeError(error)}`);
-        }
-      }
-
-      this.onPollSuccess(player, track, outputs);
-    } catch (error) {
-      this.onPollFailure(error);
-    } finally {
-      this.polling = false;
-    }
-  }
 
   private onPollSuccess(player: PlayerSnapshot, track: TrackSnapshot | undefined, outputs: OutputSnapshot[] | undefined): void {
     const wasUnreachable = !this.reachable;
@@ -790,7 +573,7 @@ export class OwnTonePlatformAccessory {
     }
 
     this.pushStateToHomeKit();
-    this.pushStateToMatter();
+    this.matterBridge.pushState(this.isPlaying, this.currentMuteState() === true);
     void this.refreshArtwork();
 
     this.platform.log.info('"%s": poll complete — %s', this.config.name, this.describeTrack(this.track));
@@ -819,7 +602,7 @@ export class OwnTonePlatformAccessory {
       this.player = undefined;
       this.track = undefined;
       this.pushStateToHomeKit();
-      this.pushStateToMatter();
+      this.matterBridge.pushState(this.isPlaying, this.currentMuteState() === true);
     }
   }
 
@@ -841,42 +624,6 @@ export class OwnTonePlatformAccessory {
     const volumeCharacteristic = this.optionalCharacteristic('Volume');
     if (volumeCharacteristic) {
       this.updateIfChanged(this.speakerService, volumeCharacteristic, this.player?.volume ?? 0);
-    }
-  }
-
-  /**
-   * Mirrors the subset of state that has a Matter accessory (see
-   * {@link configureMatter}) onto it. A no-op until that registration has
-   * completed — `matterApi` stays unset otherwise, including on Homebridge
-   * 1.x or while `enableMatter` is off.
-   */
-  private pushStateToMatter(): void {
-    if (!this.matterApi) {
-      return;
-    }
-
-    if (this.matterMuteUuid) {
-      const muted = this.currentMuteState() === true;
-      if (muted !== this.matterMutedState) {
-        this.matterMutedState = muted;
-        this.platform.log.debug('"%s": Matter Mute changed -> %s.', this.config.name, muted);
-        void this.matterApi
-          .updateAccessoryState(this.matterMuteUuid, 'onOff', { onOff: muted })
-          .catch((error) => this.platform.log.debug('"%s": could not update Matter Mute state: %s', this.config.name, describeError(error)));
-      }
-    }
-
-    if (this.matterPlayPauseUuid) {
-      const playing = this.isPlaying;
-      if (playing !== this.matterPlayingState) {
-        this.matterPlayingState = playing;
-        this.platform.log.debug('"%s": Matter Play/Pause changed -> %s.', this.config.name, playing);
-        void this.matterApi
-          .updateAccessoryState(this.matterPlayPauseUuid, 'onOff', { onOff: playing })
-          .catch((error) =>
-            this.platform.log.debug('"%s": could not update Matter Play/Pause state: %s', this.config.name, describeError(error)),
-          );
-      }
     }
   }
 
@@ -961,7 +708,7 @@ export class OwnTonePlatformAccessory {
     }
     this.artworkTrackKey = key;
 
-      const url = this.client.resolveArtworkUrl(this.track?.artworkUrl);
+    const url = this.client.resolveArtworkUrl(this.track?.artworkUrl);
     if (!url) {
       this.artwork = undefined;
       return;
@@ -973,7 +720,11 @@ export class OwnTonePlatformAccessory {
       this.platform.log.debug('"%s": cached artwork %s (%s, %d bytes)', this.config.name, url, contentType ?? 'unknown type', byteLength);
     } catch (error) {
       this.artwork = undefined;
-      this.throttle.log('artwork', (message) => this.platform.log.debug(message), `"${this.config.name}": artwork could not be fetched: ${describeError(error)}`);
+      this.throttle.log(
+        'artwork',
+        (message) => this.platform.log.debug(message),
+        `"${this.config.name}": artwork could not be fetched: ${describeError(error)}`,
+      );
     }
   }
 
@@ -996,73 +747,9 @@ export class OwnTonePlatformAccessory {
         this.platform.log.info('"%s": connected to OwnTone %s at %s', this.config.name, version, this.client.description);
       }
 
-      this.connectPushClientIfSupported(config);
+      this.pollLoop.connectPushClientIfSupported(config);
     } catch (error) {
       this.platform.log.debug('"%s": could not read the OwnTone version: %s', this.config.name, describeError(error));
-    }
-  }
-
-  /**
-   * Connects the push-notification WebSocket when `/api/config` says the
-   * server supports it. Per OwnTone's JSON API docs, `websocket_port` is
-   * always present in that response — it's `0` when the server wasn't
-   * built with (or has disabled) websocket support, and the actual port
-   * otherwise. Either way this is a one-time check at startup: servers
-   * without support just fall back to polling at `config.pollingInterval`,
-   * identical to before push support existed.
-   */
-  private connectPushClientIfSupported(config: OwnToneConfigResponse): void {
-    if (!this.config.enableWebSocket) {
-      this.platform.log.debug('"%s": push notifications disabled by config.', this.config.name);
-      return;
-    }
-
-    const port = config.websocket_port;
-    if (!Number.isInteger(port) || (port as number) <= 0) {
-      this.platform.log.info('"%s": OwnTone server does not advertise WebSocket support; using polling only.', this.config.name);
-      return;
-    }
-
-    this.pushClient = this.pushClientFactory({
-      protocol: this.config.protocol === 'https' ? 'wss' : 'ws',
-      host: this.config.host,
-      port: port as number,
-      categories: ['player', 'volume', 'outputs', 'queue', 'options'],
-      onEvent: () => {
-        this.platform.log.debug('"%s": push notification triggered a poll.', this.config.name);
-        void this.poll();
-      },
-      onConnectionChange: (connected) => this.handlePushConnectionChange(connected),
-      log: this.platform.log,
-    });
-    this.pushClient.connect();
-  }
-
-  /** Switches the poll timer between the fast configured interval and the slow WebSocket-connected reconciliation interval. */
-  private handlePushConnectionChange(connected: boolean): void {
-    if (this.wsConnected === connected) {
-      return;
-    }
-    this.wsConnected = connected;
-    this.restartPollTimer();
-
-    if (this.pushRefreshTimer) {
-      clearInterval(this.pushRefreshTimer);
-      this.pushRefreshTimer = undefined;
-    }
-
-    if (connected) {
-      // Belt-and-suspenders for a process that may run for months: forces a
-      // fresh connection periodically, since a socket stuck "open" while
-      // actually dead never fires close/error and would otherwise never be
-      // detected (see OwnTonePushClient.reconnect()). User-configurable via
-      // pushReconnectInterval — has no effect at all while disconnected,
-      // since it's only (re)started here, on transitioning to connected.
-      const intervalMs = this.config.pushReconnectInterval * 60_000;
-      this.pushRefreshTimer = setInterval(() => this.pushClient?.reconnect(), intervalMs);
-      if (typeof this.pushRefreshTimer.unref === 'function') {
-        this.pushRefreshTimer.unref();
-      }
     }
   }
 
@@ -1118,8 +805,4 @@ function formatMs(value: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}:${String(seconds).padStart(2, '0')}`;
-}
-
-function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

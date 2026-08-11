@@ -1,3 +1,12 @@
+// Sourced from `../shared/settings` (plain CommonJS, not part of `src/`)
+// rather than declared here directly, since `homebridge-ui/server.js` needs
+// these same two values and must not depend on `dist/` — see that file's
+// header comment. Re-exported so every other `import { DEFAULT_PORT } from
+// './settings'` in this codebase stays unchanged.
+import { DEFAULT_PORT, DEFAULT_TIMEOUT } from '../shared/settings';
+
+export { DEFAULT_PORT, DEFAULT_TIMEOUT };
+
 /**
  * Platform alias used in the Homebridge `platforms` config array and in
  * `config.schema.json` (`pluginAlias`).
@@ -9,14 +18,8 @@ export const PLATFORM_NAME = 'OwnTone';
  */
 export const PLUGIN_NAME = 'homebridge-owntone';
 
-/** Default OwnTone JSON API port. */
-export const DEFAULT_PORT = 3689;
-
 /** Default polling interval, in seconds. */
 export const DEFAULT_POLLING_INTERVAL = 5;
-
-/** Default per-request timeout, in milliseconds. */
-export const DEFAULT_TIMEOUT = 5000;
 
 /** Volume step (percent) applied for relative volume changes. */
 export const DEFAULT_VOLUME_STEP = 5;
@@ -32,6 +35,9 @@ export const LOG_THROTTLE_WINDOW = 60_000;
 
 /** How long an optional track switch stays "on" before resetting itself, in ms. */
 export const SWITCH_RESET_DELAY = 500;
+
+/** Push-notification message previews longer than this are truncated with an ellipsis before being debug-logged. */
+export const PUSH_MESSAGE_PREVIEW_MAX_LENGTH = 200;
 
 /**
  * How often to poll as a reconciliation safety net while the push

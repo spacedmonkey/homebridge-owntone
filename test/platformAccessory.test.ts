@@ -411,6 +411,67 @@ describe('OwnTonePlatformAccessory — services', () => {
   });
 });
 
+/**
+ * A `Characteristic` namespace missing the given named constructors, so
+ * `optionalCharacteristic()` treats them the same way it would on an older
+ * HAP version that doesn't have them yet. Shadows just those names — every
+ * other characteristic still resolves through the prototype chain to the
+ * real hap-nodejs `Characteristic`.
+ */
+function characteristicWithout(...names: string[]): typeof Characteristic {
+  const proxy = Object.create(Characteristic) as typeof Characteristic;
+  for (const name of names) {
+    Object.defineProperty(proxy, name, { value: undefined, enumerable: true, configurable: true, writable: true });
+  }
+  return proxy;
+}
+
+async function buildWithCharacteristic(
+  characteristic: typeof Characteristic,
+  config: Partial<ResolvedServerConfig> = {},
+): Promise<{ handler: OwnTonePlatformAccessory; log: MockLog }> {
+  const resolved = serverConfig(config);
+  const log = createMockLog();
+  const api = createMockApi();
+  const platform = { Service: HapService, Characteristic: characteristic, api, log } as unknown as OwnTonePlatform;
+  const accessory = createAccessory(resolved.name, serverIdentity(resolved));
+  const client = createFakeClient();
+
+  const handler = new OwnTonePlatformAccessory(platform, accessory, resolved, client as unknown as OwnToneClient);
+  await flush();
+
+  return { handler, log };
+}
+
+describe('OwnTonePlatformAccessory — HAP version feature detection', () => {
+  it('warns and disables Apple Remote control when this HAP version has no RemoteKey characteristic', async () => {
+    const { handler, log } = await buildWithCharacteristic(characteristicWithout('RemoteKey'));
+
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('this HAP version has no RemoteKey characteristic'),
+      'Living Room Music',
+    );
+    handler.dispose();
+  });
+
+  it('logs at debug when this HAP version has no VolumeSelector characteristic', async () => {
+    const { handler, log } = await buildWithCharacteristic(characteristicWithout('VolumeSelector'));
+
+    expect(log.debug).toHaveBeenCalledWith('"%s": VolumeSelector is unavailable in this HAP version.', 'Living Room Music');
+    handler.dispose();
+  });
+
+  it('falls back to relative-only volume control when this HAP version has no absolute Volume characteristic', async () => {
+    const { handler, log } = await buildWithCharacteristic(characteristicWithout('Volume'));
+
+    expect(log.info).toHaveBeenCalledWith(
+      '"%s": absolute volume is not available in this HAP version; only relative volume control is exposed.',
+      'Living Room Music',
+    );
+    handler.dispose();
+  });
+});
+
 describe('OwnTonePlatformAccessory — state mapping', () => {
   it('is active while OwnTone is playing', async () => {
     const { television, handler } = await build();

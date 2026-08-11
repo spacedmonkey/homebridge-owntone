@@ -1,11 +1,10 @@
 const { HomebridgePluginUiServer } = require('@homebridge/plugin-ui-utils');
+const { DEFAULT_PORT, DEFAULT_TIMEOUT } = require('../shared/settings');
 
-// Deliberately self-contained: this process is spawned from
-// `homebridge-ui/server.js` directly, independent of how (or whether) the
-// main plugin's `dist/` was built at this install path, so it must not
-// require anything from `../dist`.
-const DEFAULT_PORT = 3689;
-const DEFAULT_TIMEOUT = 5000;
+// This process is spawned from `homebridge-ui/server.js` directly,
+// independent of how (or whether) the main plugin's `dist/` was built at
+// this install path, so it must not require anything from `../dist` — the
+// shared constants above come from `../shared/settings` instead.
 
 class OwnTonePluginUiServer extends HomebridgePluginUiServer {
   constructor() {

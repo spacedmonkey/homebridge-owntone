@@ -1,7 +1,7 @@
 import type { PlatformAccessory, PlatformConfig } from 'homebridge';
 
 import { OwnTonePlatform, resolveServerConfigs, serverIdentity } from '../src/platform';
-import { PLATFORM_NAME, PLUGIN_NAME } from '../src/settings';
+import { DEFAULT_PORT, PLATFORM_NAME, PLUGIN_NAME } from '../src/settings';
 import type { OwnTonePlatformConfig } from '../src/types';
 import { createAccessory, createMockApi, createMockLog, type MockApi, type MockLog } from './helpers/homebridgeMock';
 
@@ -338,6 +338,19 @@ describe('OwnTonePlatform', () => {
     api.emitEvent('didFinishLaunching');
 
     expect(api.unregisterPlatformAccessories).toHaveBeenCalledWith(PLUGIN_NAME, PLATFORM_NAME, [stale]);
+  });
+
+  it('logs a migration message for a cached accessory that is now published standalone', () => {
+    const { platform, api, log } = launch(platformConfig([{ name: 'Living Room Music', host: '192.168.1.50' }]));
+
+    const identity = serverIdentity({ name: 'Living Room Music', host: '192.168.1.50', port: DEFAULT_PORT });
+    const migrated = createAccessory('Living Room Music', identity);
+    platform.configureAccessory(migrated);
+
+    api.emitEvent('didFinishLaunching');
+
+    expect(log.info).toHaveBeenCalledWith(expect.stringContaining('now published as a standalone Television accessory'), 'Living Room Music');
+    expect(api.unregisterPlatformAccessories).toHaveBeenCalledWith(PLUGIN_NAME, PLATFORM_NAME, [migrated]);
   });
 
   it('does not call unregisterPlatformAccessories when the cache is empty', () => {
