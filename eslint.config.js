@@ -36,10 +36,23 @@ module.exports = tseslint.config(
     },
   },
   {
-    files: ['*.js'],
+    files: ['*.js', 'homebridge-ui/**/*.js', 'shared/**/*.js'],
     languageOptions: {
       sourceType: 'commonjs',
-      globals: { module: 'writable', require: 'readonly', __dirname: 'readonly' },
+      globals: {
+        module: 'writable',
+        require: 'readonly',
+        __dirname: 'readonly',
+        Buffer: 'readonly',
+        fetch: 'readonly',
+        AbortSignal: 'readonly',
+      },
+    },
+    rules: {
+      // These files are plain CommonJS by design (see server.js's header
+      // comment) — `require()` here is not the TS-project import style the
+      // rule otherwise guards against.
+      '@typescript-eslint/no-require-imports': 'off',
     },
   },
 );

@@ -100,6 +100,36 @@ describe('OwnTonePushClient — connecting', () => {
   });
 });
 
+describe('OwnTonePushClient — connection setup failures', () => {
+  it('handles a WebSocket constructor that throws synchronously', () => {
+    const { client, webSocketImpl, log, onConnectionChange } = createHarness();
+    webSocketImpl.mockImplementationOnce(() => {
+      throw new Error('ctor boom');
+    });
+
+    client.connect();
+
+    expect(onConnectionChange).toHaveBeenCalledWith(false);
+    expect(log.info).toHaveBeenCalledWith(
+      'Push notification connection to %s unavailable: %s. Falling back to polling.',
+      'ws://192.168.1.50:3688',
+      'ctor boom',
+    );
+  });
+
+  it('logs at debug, without disconnecting, when sending the notify subscription throws', () => {
+    const { client, sockets, log } = createHarness();
+    client.connect();
+    const socket = latestSocket(sockets);
+    socket.send = () => {
+      throw new Error('send boom');
+    };
+
+    expect(() => socket.onopen?.()).not.toThrow();
+    expect(log.debug).toHaveBeenCalledWith('Failed to send push notification subscription: %s', 'send boom');
+  });
+});
+
 describe('OwnTonePushClient — events', () => {
   // OwnTone's docs don't specify the server->client message payload shape,
   // so any message received while connected is treated as "something in a
@@ -146,6 +176,38 @@ describe('OwnTonePushClient — disconnects and reconnects', () => {
       'Push notification connection to %s unavailable: %s. Falling back to polling.',
       'ws://192.168.1.50:3688',
       'code 1006, abnormal closure',
+    );
+  });
+
+  it('describes an error-less disconnect as "connection closed"', () => {
+    const { client, sockets, log } = createHarness();
+    client.connect();
+
+    latestSocket(sockets).onerror?.(undefined);
+
+    expect(log.info).toHaveBeenCalledWith(
+      'Push notification connection to %s unavailable: %s. Falling back to polling.',
+      'ws://192.168.1.50:3688',
+      'connection closed',
+    );
+  });
+
+  it('extracts type, message and a nested error from a CloseEvent-shaped object', () => {
+    const { client, sockets, log } = createHarness();
+    client.connect();
+
+    latestSocket(sockets).onerror?.({
+      type: 'error',
+      code: 1011,
+      reason: 'internal error',
+      message: 'socket error',
+      error: new Error('nested boom'),
+    });
+
+    expect(log.info).toHaveBeenCalledWith(
+      'Push notification connection to %s unavailable: %s. Falling back to polling.',
+      'ws://192.168.1.50:3688',
+      'error, code 1011, internal error, socket error, nested boom',
     );
   });
 
@@ -217,6 +279,43 @@ describe('OwnTonePushClient — disconnects and reconnects', () => {
     }
 
     expect(expectedDelay).toBe(WEBSOCKET_RECONNECT_MAX_DELAY_MS);
+  });
+
+  it('does not schedule a second reconnect timer when disconnect handling fires twice for the same drop', () => {
+    // A real WebSocket implementation commonly fires both `error` and
+    // `close` for one drop; both route through the same handleDisconnect,
+    // so the second call must not schedule a duplicate retry.
+    const { client, sockets, webSocketImpl } = createHarness();
+    client.connect();
+
+    const socket = latestSocket(sockets);
+    const { onerror, onclose } = socket;
+    onerror?.(new Error('refused'));
+    onclose?.({});
+
+    jest.advanceTimersByTime(WEBSOCKET_RECONNECT_MIN_DELAY_MS);
+    expect(webSocketImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('skips logging and scheduling a reconnect when disconnect handling fires after dispose (a stale-handler race)', () => {
+    // detachSocket() nulls the socket's own onerror/onclose during dispose(),
+    // but an event already in flight at that instant still holds its own
+    // closure over handleDisconnect and can fire anyway; this simulates that
+    // by invoking a handler reference captured before dispose().
+    const { client, sockets, log, onConnectionChange, webSocketImpl } = createHarness();
+    client.connect();
+    const staleOnError = latestSocket(sockets).onerror;
+
+    client.dispose();
+    onConnectionChange.mockClear();
+
+    staleOnError?.(new Error('late error'));
+
+    expect(onConnectionChange).toHaveBeenCalledWith(false);
+    expect(log.info).not.toHaveBeenCalledWith(expect.stringContaining('unavailable'), expect.anything(), expect.anything());
+
+    jest.advanceTimersByTime(WEBSOCKET_RECONNECT_MAX_DELAY_MS * 10);
+    expect(webSocketImpl).toHaveBeenCalledTimes(1);
   });
 
   it('resets the backoff delay after a successful reconnect', () => {
@@ -362,6 +461,46 @@ describe('OwnTonePushClient — dispose', () => {
 
     expect(() => client.connect()).not.toThrow();
     expect(webSocketImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('OwnTonePushClient — no WebSocket implementation available', () => {
+  afterEach(() => {
+    delete (globalThis as { WebSocket?: unknown }).WebSocket;
+    jest.unmock('undici');
+    jest.resetModules();
+  });
+
+  it('falls back to polling and logs a clear reason when no WebSocket implementation exists', () => {
+    delete (globalThis as { WebSocket?: unknown }).WebSocket;
+    jest.doMock('undici', () => ({}));
+
+    let Isolated!: typeof OwnTonePushClient;
+    jest.isolateModules(() => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      ({ OwnTonePushClient: Isolated } = require('../src/owntonePushClient') as typeof import('../src/owntonePushClient'));
+    });
+
+    const log = createMockLog();
+    const onConnectionChange = jest.fn();
+    const client = new Isolated({
+      protocol: 'ws',
+      host: 'h',
+      port: 1,
+      categories: ['player'],
+      onEvent: jest.fn(),
+      onConnectionChange,
+      log,
+    });
+
+    client.connect();
+
+    expect(onConnectionChange).toHaveBeenCalledWith(false);
+    expect(log.info).toHaveBeenCalledWith(
+      'Push notification connection to %s unavailable: %s. Falling back to polling.',
+      'ws://h:1',
+      'No WebSocket implementation available in this Node.js runtime',
+    );
   });
 });
 

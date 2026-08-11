@@ -1,6 +1,6 @@
 import type { Logging } from 'homebridge';
 
-import { WEBSOCKET_RECONNECT_MAX_DELAY_MS, WEBSOCKET_RECONNECT_MIN_DELAY_MS } from './settings';
+import { PUSH_MESSAGE_PREVIEW_MAX_LENGTH, WEBSOCKET_RECONNECT_MAX_DELAY_MS, WEBSOCKET_RECONNECT_MIN_DELAY_MS } from './settings';
 
 /** `notify` categories documented at https://owntone.github.io/owntone-server/json-api/#push-notifications. */
 export type OwnTonePushCategory = 'update' | 'database' | 'outputs' | 'player' | 'options' | 'volume' | 'queue';
@@ -263,7 +263,7 @@ function defaultWebSocketCtor(): WebSocketCtor | undefined {
 /** Best-effort, size-capped rendering of a raw WebSocket message payload for debug logging. */
 function describeMessage(data: unknown): string {
   const text = typeof data === 'string' ? data : String(data);
-  return text.length > 200 ? `${text.slice(0, 200)}…` : text;
+  return text.length > PUSH_MESSAGE_PREVIEW_MAX_LENGTH ? `${text.slice(0, PUSH_MESSAGE_PREVIEW_MAX_LENGTH)}…` : text;
 }
 
 /**

@@ -157,6 +157,28 @@ describe('OwnToneClient — request options', () => {
   });
 });
 
+describe('OwnToneClient — TLS', () => {
+  it('attaches an insecure dispatcher when ignoreCertificateErrors is set for https', async () => {
+    const { client, fetchImpl } = createClient({ protocol: 'https', ignoreCertificateErrors: true });
+    fetchImpl.mockResolvedValue(fakeResponse({ status: 204 }));
+
+    await client.play();
+
+    const { init } = lastCall(fetchImpl);
+    expect((init as unknown as { dispatcher?: unknown }).dispatcher).toBeDefined();
+  });
+
+  it('does not attach a dispatcher when ignoreCertificateErrors is off', async () => {
+    const { client, fetchImpl } = createClient({ protocol: 'https', ignoreCertificateErrors: false });
+    fetchImpl.mockResolvedValue(fakeResponse({ status: 204 }));
+
+    await client.play();
+
+    const { init } = lastCall(fetchImpl);
+    expect((init as unknown as { dispatcher?: unknown }).dispatcher).toBeUndefined();
+  });
+});
+
 describe('OwnToneClient — error handling', () => {
   it('rejects with OwnToneNetworkError when the connection is refused', async () => {
     const { client, fetchImpl } = createClient();
@@ -196,6 +218,13 @@ describe('OwnToneClient — error handling', () => {
     fetchImpl.mockResolvedValue(fakeResponse({ malformed: true }));
 
     await expect(client.getStatus()).rejects.toBeInstanceOf(OwnToneApiError);
+  });
+
+  it('does not throw when redacting a malformed URL in a network-error message', async () => {
+    const { client, fetchImpl } = createClient();
+    fetchImpl.mockRejectedValue(new Error('network down'));
+
+    await expect(client.fetchArtwork('not a valid url')).rejects.toBeInstanceOf(OwnToneNetworkError);
   });
 
   it('fails clearly when no fetch implementation exists', async () => {
@@ -412,6 +441,15 @@ describe('OwnToneClient — volume', () => {
     expect(lastCall(fetchImpl).url).toContain('volume=100');
   });
 
+  it('clamps a non-finite volume to 0', async () => {
+    const { client, fetchImpl } = createClient();
+    fetchImpl.mockResolvedValue(fakeResponse({ status: 204 }));
+
+    await client.setVolume(Number.NaN);
+
+    expect(lastCall(fetchImpl).url).toContain('volume=0');
+  });
+
   it('targets a single output when an output id is given', async () => {
     const { client, fetchImpl } = createClient();
     fetchImpl.mockResolvedValue(fakeResponse({ status: 204 }));
@@ -488,6 +526,11 @@ describe('OwnToneClient — artwork', () => {
   it('returns undefined for a missing artwork url', () => {
     const { client } = createClient();
     expect(client.resolveArtworkUrl(undefined)).toBeUndefined();
+  });
+
+  it('returns undefined when the artwork url cannot be parsed', () => {
+    const { client } = createClient();
+    expect(client.resolveArtworkUrl('https:')).toBeUndefined();
   });
 
   it('downloads artwork and reports its size', async () => {

@@ -1,4 +1,5 @@
 import { DEFAULT_VOLUME_STEP } from './settings';
+import { describeError, nonEmpty } from './util';
 import type {
   OutputSnapshot,
   OwnToneConfigResponse,
@@ -14,6 +15,17 @@ import type {
 
 /** The subset of `fetch` this client relies on; injectable for tests. */
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
+
+/**
+ * Minimal structural shape of an undici `Agent` — just enough to describe
+ * what Node's global `fetch` needs from `RequestInit.dispatcher` to actually
+ * use it. Kept local and structural rather than importing undici's own
+ * `Dispatcher` type, which does not match the copy of undici bundled with
+ * this project's `@types/node`.
+ */
+interface Dispatcher {
+  dispatch(...args: unknown[]): boolean;
+}
 
 /** Thrown when the OwnTone server answers with a non-2xx status. */
 export class OwnToneApiError extends Error {
@@ -84,7 +96,7 @@ export class OwnToneClient {
   /** e.g. `http://192.168.1.50:3689` — never contains credentials. */
   readonly baseUrl: string;
 
-  private insecureDispatcher?: unknown;
+  private insecureDispatcher?: Dispatcher;
   private volumeBeforeMute?: number;
 
   constructor(private readonly options: OwnToneClientOptions) {
@@ -341,7 +353,7 @@ export class OwnToneClient {
    * Only constructed when the user opted in, so the TLS relaxation can never
    * leak into a normally configured server.
    */
-  private getDispatcher(): unknown {
+  private getDispatcher(): Dispatcher | undefined {
     if (!this.options.ignoreCertificateErrors || this.options.protocol !== 'https') {
       return undefined;
     }
@@ -387,7 +399,7 @@ export class OwnToneClient {
       if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
         throw new OwnToneNetworkError(`Request to ${method} ${redact(url)} timed out after ${this.options.timeout}ms`, error);
       }
-      throw new OwnToneNetworkError(`Request to ${method} ${redact(url)} failed: ${errorMessage(error)}`, error);
+      throw new OwnToneNetworkError(`Request to ${method} ${redact(url)} failed: ${describeError(error)}`, error);
     }
   }
 
@@ -410,7 +422,7 @@ export class OwnToneClient {
     try {
       return await response.json();
     } catch (error) {
-      throw new OwnToneApiError(`${method} ${path} returned a malformed JSON body: ${errorMessage(error)}`);
+      throw new OwnToneApiError(`${method} ${path} returned a malformed JSON body: ${describeError(error)}`);
     }
   }
 }
@@ -458,10 +470,6 @@ export function normaliseOutput(raw: OwnToneOutput): OutputSnapshot {
   };
 }
 
-function nonEmpty(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
-}
-
 function clampVolume(volume: number): number {
   if (!Number.isFinite(volume)) {
     return 0;
@@ -479,11 +487,4 @@ function redact(url: string): string {
   } catch {
     return url;
   }
-}
-
-function errorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return String(error);
 }

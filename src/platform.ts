@@ -22,6 +22,7 @@ import {
   PLUGIN_NAME,
 } from './settings';
 import type { OutputSnapshot, OwnTonePlatformConfig, OwnToneServerConfig, ResolvedServerConfig } from './types';
+import { describeError, nonEmpty } from './util';
 
 /**
  * Homebridge dynamic platform for OwnTone.
@@ -254,10 +255,6 @@ function positiveInt(value: unknown, fallback: number, min: number, max: number)
   return Math.max(min, Math.min(max, Math.round(parsed)));
 }
 
-function nonEmpty(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
-}
-
 /**
  * Validate the `outputs` cache written by the custom UI's "Refresh Outputs"
  * button. Malformed or hand-edited entries are dropped rather than rejected,
@@ -294,8 +291,4 @@ function resolveOutputs(value: unknown): OutputSnapshot[] {
   }
 
   return outputs;
-}
-
-function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
