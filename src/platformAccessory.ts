@@ -233,6 +233,22 @@ export class OwnTonePlatformAccessory {
       });
     }
 
+    // CurrentMediaState/TargetMediaState drive the play/pause control Apple
+    // Home shows on the Television's Control Center card (distinct from the
+    // Apple Remote's RemoteKey, which only appears in the remote widget).
+    const currentMediaState = this.optionalCharacteristic('CurrentMediaState');
+    if (currentMediaState) {
+      service.getCharacteristic(currentMediaState).onGet(() => this.currentMediaState());
+    }
+
+    const targetMediaState = this.optionalCharacteristic('TargetMediaState');
+    if (targetMediaState) {
+      service
+        .getCharacteristic(targetMediaState)
+        .onGet(() => this.currentMediaState())
+        .onSet((value) => this.handleTargetMediaStateSet(value));
+    }
+
     if (typeof service.setPrimaryService === 'function') {
       service.setPrimaryService(true);
     }
@@ -440,6 +456,45 @@ export class OwnTonePlatformAccessory {
     void this.pollLoop.poll();
   }
 
+  /** Maps OwnTone's play state onto the HomeKit CurrentMediaState/TargetMediaState enum (PLAY=0, PAUSE=1, STOP=2). */
+  private currentMediaState(): CharacteristicValue {
+    const mediaState = this.optionalCharacteristic('CurrentMediaState') ?? this.optionalCharacteristic('TargetMediaState');
+    const states = mediaState ? enumsOf(mediaState) : {};
+
+    if (!this.reachable) {
+      return states.STOP ?? 2;
+    }
+
+    switch (this.player?.state) {
+      case 'play':
+        return states.PLAY ?? 0;
+      case 'pause':
+        return states.PAUSE ?? 1;
+      default:
+        return states.STOP ?? 2;
+    }
+  }
+
+  private async handleTargetMediaStateSet(value: CharacteristicValue): Promise<void> {
+    const targetMediaState = this.optionalCharacteristic('TargetMediaState');
+    if (!targetMediaState) {
+      return;
+    }
+
+    const states = enumsOf(targetMediaState);
+    const numeric = Number(value);
+
+    if (numeric === states.PLAY) {
+      await this.runCommand('play', () => this.client.play(), true);
+    } else if (numeric === states.PAUSE) {
+      await this.runCommand('pause', () => this.client.pause(), true);
+    } else if (numeric === states.STOP) {
+      await this.runCommand('stop', () => this.client.stop(), true);
+    }
+
+    void this.pollLoop.poll();
+  }
+
   private async handleActiveIdentifierSet(value: CharacteristicValue): Promise<void> {
     const identifier = Number(value);
     const entry = this.inputs.find((input) => input.identifier === identifier);
@@ -613,6 +668,16 @@ export class OwnTonePlatformAccessory {
     this.updateIfChanged(this.televisionService, Characteristic.Active, this.currentActiveState());
     this.updateIfChanged(this.televisionService, Characteristic.ActiveIdentifier, this.activeIdentifier);
     this.updateIfChanged(this.speakerService, Characteristic.Mute, this.currentMuteState());
+
+    const currentMediaState = this.optionalCharacteristic('CurrentMediaState');
+    if (currentMediaState) {
+      this.updateIfChanged(this.televisionService, currentMediaState, this.currentMediaState());
+    }
+
+    const targetMediaState = this.optionalCharacteristic('TargetMediaState');
+    if (targetMediaState) {
+      this.updateIfChanged(this.televisionService, targetMediaState, this.currentMediaState());
+    }
 
     if (this.playPauseSwitchService) {
       this.updateIfChanged(this.playPauseSwitchService, Characteristic.On, this.isPlaying);

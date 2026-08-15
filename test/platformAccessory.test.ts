@@ -537,6 +537,36 @@ describe('OwnTonePlatformAccessory — state mapping', () => {
     expect(speaker.getCharacteristic(Characteristic.Mute).value).toBe(true);
     handler.dispose();
   });
+
+  it('reports CurrentMediaState/TargetMediaState as PLAY while OwnTone is playing', async () => {
+    const { television, handler } = await build();
+
+    expect(television.getCharacteristic(Characteristic.CurrentMediaState).value).toBe(Characteristic.CurrentMediaState.PLAY);
+    expect(television.getCharacteristic(Characteristic.TargetMediaState).value).toBe(Characteristic.TargetMediaState.PLAY);
+    handler.dispose();
+  });
+
+  it('reports CurrentMediaState/TargetMediaState as PAUSE while OwnTone is paused', async () => {
+    const client = createFakeClient();
+    client.getStatus.mockResolvedValue(playing({ state: 'pause' }));
+
+    const { television, handler } = await build({}, client);
+
+    expect(television.getCharacteristic(Characteristic.CurrentMediaState).value).toBe(Characteristic.CurrentMediaState.PAUSE);
+    expect(television.getCharacteristic(Characteristic.TargetMediaState).value).toBe(Characteristic.TargetMediaState.PAUSE);
+    handler.dispose();
+  });
+
+  it('reports CurrentMediaState as STOP once the server is unreachable', async () => {
+    const client = createFakeClient();
+    const { television, handler } = await build({}, client);
+
+    client.getStatus.mockRejectedValue(new Error('connect ECONNREFUSED'));
+    await jest.advanceTimersByTimeAsync(POLL_MS * 3);
+
+    expect(television.getCharacteristic(Characteristic.CurrentMediaState).value).toBe(Characteristic.CurrentMediaState.STOP);
+    handler.dispose();
+  });
 });
 
 describe('OwnTonePlatformAccessory — commands', () => {
@@ -620,6 +650,21 @@ describe('OwnTonePlatformAccessory — commands', () => {
 
     await speaker.getCharacteristic(Characteristic.Mute).handleSetRequest(false);
     expect(client.setMute).toHaveBeenCalledWith(false);
+
+    handler.dispose();
+  });
+
+  it('plays, pauses and stops through the TargetMediaState characteristic', async () => {
+    const { television, client, handler } = await build();
+
+    await television.getCharacteristic(Characteristic.TargetMediaState).handleSetRequest(Characteristic.TargetMediaState.PAUSE);
+    expect(client.pause).toHaveBeenCalled();
+
+    await television.getCharacteristic(Characteristic.TargetMediaState).handleSetRequest(Characteristic.TargetMediaState.PLAY);
+    expect(client.play).toHaveBeenCalled();
+
+    await television.getCharacteristic(Characteristic.TargetMediaState).handleSetRequest(Characteristic.TargetMediaState.STOP);
+    expect(client.stop).toHaveBeenCalled();
 
     handler.dispose();
   });

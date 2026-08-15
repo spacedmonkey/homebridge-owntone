@@ -22,7 +22,7 @@ For every OwnTone server you configure, the plugin creates one HomeKit accessory
 | Service | Purpose |
 | --- | --- |
 | `AccessoryInformation` | Manufacturer, model, stable serial number, OwnTone version as firmware revision |
-| `Television` | Power (play/pause), Apple Remote keys, input selection |
+| `Television` | Power (play/pause), Apple Remote keys, input selection, Control Center play/pause (`CurrentMediaState`/`TargetMediaState`) |
 | `TelevisionSpeaker` | Volume up/down, absolute volume, mute |
 | `InputSource` | One per OwnTone output (speaker), plus a generic "OwnTone" source |
 | `Switch` *(optional)* | Next Track / Previous Track / Play-Pause / Mute, when `exposeTrackSwitches` is enabled |
@@ -177,6 +177,10 @@ Everything below maps onto a documented OwnTone JSON API endpoint.
 | Back / Exit / Info / Arrow Up / Arrow Down | No-op (logged at debug level) |
 
 HAP has no separate `PLAY` and `PAUSE` remote keys — only `PLAY_PAUSE`. The plugin registers handlers for `PLAY` and `PAUSE` defensively, so if a future HAP version adds them they are picked up automatically.
+
+### Play/Pause in Control Center
+
+Separately from the Apple Remote widget above, the `Television` service also exposes `CurrentMediaState`/`TargetMediaState`, which is what makes Apple Home show a play/pause control directly on the accessory's tile/card — you don't need to open the remote to pause playback. Both characteristics track `player.state` (mapped `play`/`pause`/anything-else → `PLAY`/`PAUSE`/`STOP`) and are kept in sync on every poll; setting `TargetMediaState` from the Home app calls the same `play()`/`pause()`/`stop()` commands as everywhere else.
 
 ### Input sources
 
