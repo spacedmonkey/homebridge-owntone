@@ -22,6 +22,8 @@
   "homepage": "https://github.com/spacedmonkey/homebridge-owntone#readme",
   "keywords": [
     "homebridge-plugin",
+    "supports-hap",
+    "supports-matter",
     "owntone",
     "forked-daapd",
     "daapd",
@@ -52,6 +54,7 @@
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "check": "npm run lint && npm run build && npm test",
+    "prepare": "npm run build",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
