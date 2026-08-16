@@ -23,7 +23,7 @@ function createMatterApi(status?: MatterBridgeStatus): {
 
   const matter: MatterAPI = {
     uuid: { generate: (data: string) => `matter-uuid:${data}` },
-    deviceTypes: { OnOffSwitch: 'OnOffSwitch' },
+    deviceTypes: { OnOffOutlet: 'OnOffOutlet', BridgedNode: 'BridgedNode' },
     clusterNames: { OnOff: 'onOff' },
     status,
     registerPlatformAccessories,

@@ -40,7 +40,7 @@ function createMockMatterApi(): MockMatterApi {
 
   const matter: MatterAPI = {
     uuid: { generate: (data: string) => `matter-uuid:${data}` },
-    deviceTypes: { OnOffSwitch: 'OnOffSwitch' },
+    deviceTypes: { OnOffOutlet: 'OnOffOutlet', BridgedNode: 'BridgedNode' },
     clusterNames: { OnOff: 'onOff' },
     registerPlatformAccessories,
     unregisterPlatformAccessories,

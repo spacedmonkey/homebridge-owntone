@@ -125,7 +125,13 @@ export class MatterAccessoryBridge {
     const accessory: MatterAccessoryDefinition = {
       UUID: this.matterUuid,
       displayName: `${config.name} Controls`,
-      deviceType: matter.deviceTypes.OnOffSwitch,
+      // BridgedNode is a non-controllable container for composed devices —
+      // this parent has no clusters/handlers of its own, only `parts` below.
+      // Some Matter controllers (observed: SmartThings) tolerate a parent
+      // that's itself a controllable device type, but others (observed:
+      // Aqara) silently drop the whole composed device if the parent isn't
+      // a proper BridgedNode.
+      deviceType: matter.deviceTypes.BridgedNode,
       // Matter's BasicInformation.SerialNumber caps out at 32 characters;
       // deps.serialNumber() is a 36-character hyphenated UUID (fine for
       // HomeKit's SerialNumber characteristic, which has no such limit).
@@ -201,7 +207,7 @@ export class MatterAccessoryBridge {
     return {
       id,
       displayName,
-      deviceType: matter.deviceTypes.OnOffSwitch,
+      deviceType: matter.deviceTypes.OnOffOutlet,
       clusters: { onOff: { onOff: this.partState.get(id) ?? false } },
       handlers: {
         onOff: {
@@ -219,13 +225,13 @@ export class MatterAccessoryBridge {
    * short delay, the same "tap to trigger" pattern the HomeKit version of
    * these switches uses — Matter's `GenericSwitch` device type exists for
    * physical momentary switches but isn't user-tappable in Apple Home, so
-   * `OnOffSwitch` is used here too.
+   * `OnOffOutlet` is used here too.
    */
   private momentaryPart(matter: MatterAPI, id: PartId, displayName: string, action: () => Promise<void>): MatterAccessoryPart {
     return {
       id,
       displayName,
-      deviceType: matter.deviceTypes.OnOffSwitch,
+      deviceType: matter.deviceTypes.OnOffOutlet,
       clusters: { onOff: { onOff: false } },
       handlers: {
         onOff: {
