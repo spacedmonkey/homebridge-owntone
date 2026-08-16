@@ -126,7 +126,12 @@ export class MatterAccessoryBridge {
       UUID: this.matterUuid,
       displayName: `${config.name} Controls`,
       deviceType: matter.deviceTypes.OnOffSwitch,
-      serialNumber: this.deps.serialNumber(),
+      // Matter's BasicInformation.SerialNumber caps out at 32 characters;
+      // deps.serialNumber() is a 36-character hyphenated UUID (fine for
+      // HomeKit's SerialNumber characteristic, which has no such limit).
+      // Stripping the hyphens keeps it deterministic and unique while
+      // fitting under the cap (32 hex digits exactly).
+      serialNumber: this.deps.serialNumber().replace(/-/g, ''),
       manufacturer: 'OwnTone',
       model: 'OwnTone Controls',
       parts,
